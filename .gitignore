@@ -221,3 +221,5 @@ __marimo__/
 viz/
 data/
 checkpoints/
+Results/
+.pdf

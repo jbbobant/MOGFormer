@@ -14,6 +14,7 @@ class MultiOmicsGraphClassifier(nn.Module):
     to predict breast cancer subtypes.
     """
     def __init__(self, 
+                 base_adj: torch.Tensor,
                  num_classes: int = 5, 
                  d: int = 64, 
                  pe_dim: int = 16,
@@ -21,7 +22,9 @@ class MultiOmicsGraphClassifier(nn.Module):
                  global_heads: int = 8,
                  global_layers: int = 4,
                  dropout: float = 0.1,
-                 rna_dropout_prob: float = 0.15):
+                 rna_dropout_prob: float = 0.15,
+                 meth_dropout_prob: float = 0.15,
+                 cnv_dropout_prob: float = 0.15 ):
         """
         Args:
             num_classes: Number of clinical subtypes (e.g., 5 for BRCA)
@@ -29,7 +32,7 @@ class MultiOmicsGraphClassifier(nn.Module):
             pe_dim: Dimensionality of Graph Positional Encodings
         """
         super(MultiOmicsGraphClassifier, self).__init__()
-        
+        self.base_adj = base_adj
         self.d = d
         self.num_classes = num_classes
         
@@ -41,7 +44,9 @@ class MultiOmicsGraphClassifier(nn.Module):
             d=d, 
             num_heads=mini_heads, 
             dropout=dropout, 
-            rna_dropout_prob=rna_dropout_prob
+            rna_dropout_prob=rna_dropout_prob, 
+            cnv_dropout_prob=cnv_dropout_prob,
+            meth_dropout_prob=meth_dropout_prob
         )
         
         # 3. Inter-Gene Network (Global Graph Transformer)
@@ -50,7 +55,8 @@ class MultiOmicsGraphClassifier(nn.Module):
             pe_dim=pe_dim, 
             num_heads=global_heads, 
             num_layers=global_layers, 
-            dropout=dropout
+            dropout=dropout,
+            base_adj=base_adj
         )
         
         # 4. Classification Head (MLP)
@@ -86,7 +92,7 @@ class MultiOmicsGraphClassifier(nn.Module):
         h, intra_attn_weights = self.mini_transformer(z_m, z_c, z_t)
         
         # Step 3: Global Transformer -> Structural injection and [TUMOR_CLS] aggregation
-        tumor_state, H_final = self.global_transformer(h, e_graph)
+        tumor_state, H_final = self.global_transformer(h, e_graph, self.base_adj)
         
         # Step 4: Subtype Prediction -> MLP on the final [TUMOR_CLS] state 
         logits = self.classifier_head(tumor_state)

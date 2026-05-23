@@ -7,7 +7,7 @@ class MiniTransformer(nn.Module):
     Intra-Gene Attention mechanism. Fuses mRNA, CNV, and Methylation data 
     into a single unified gene representation via self-attention.
     """
-    def __init__(self, d: int = 64, num_heads: int = 4, dropout: float = 0.1, rna_dropout_prob: float = 0):
+    def __init__(self, d: int = 64, num_heads: int = 4, dropout: float = 0.1, rna_dropout_prob: float = 0.3, cnv_dropout_prob: float = 0.15, meth_dropout_prob: float = 0.15):
         """
         Args:
             d: Token dimension (default 64)
@@ -18,6 +18,8 @@ class MiniTransformer(nn.Module):
         super(MiniTransformer, self).__init__()
         self.d = d
         self.rna_dropout_prob = rna_dropout_prob
+        self.cnv_dropout_prob = cnv_dropout_prob
+        self.meth_dropout_prob = meth_dropout_prob
         
         # 1. Learnable Gene-Level Classification Token (z_cls)
         # Shape: (1, 1, 1, d) so it can broadcast across Batch and N_genes
@@ -50,11 +52,20 @@ class MiniTransformer(nn.Module):
         B, N, D = z_m.shape
         
         # -- REGULARIZATION: Modality Dropout --
-        # Randomly zero-out the mRNA embedding for a percentage of genes in a batch during training
+        # Randomly zero-out the  embedding for a percentage of genes in a batch during training
+        # Create independent random masks for each modality channel
+
         if self.training and self.rna_dropout_prob > 0.0:
-            # Create a mask of shape (Batch, N_genes, 1)
-            mask = (torch.rand(B, N, 1, device=z_m.device) > self.rna_dropout_prob).float()
-            z_m = z_m * mask
+            mask_rna = (torch.rand(B, N, 1, device=z_m.device) > self.rna_dropout_prob).float()
+            z_m = z_m * mask_rna
+
+        if self.training and self.meth_dropout_prob > 0.0:
+            mask_methy = (torch.rand(B, N, 1, device=z_t.device) > self.meth_dropout_prob).float()
+            z_t = z_t * mask_methy
+
+        if self.training and self.cnv_dropout_prob > 0.0:
+            mask_cnv = (torch.rand(B, N, 1, device=z_c.device) > self.cnv_dropout_prob).float()
+            z_c = z_c * mask_cnv
 
         # -- SEQUENCE FORMULATION --
         # Stack modalities to shape: (Batch, N_genes, 3, d)

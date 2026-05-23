@@ -10,6 +10,9 @@ import matplotlib.pyplot as plt
 from tqdm import tqdm
 from typing import Dict, Optional
 
+from src.utils.loss import MultiClassFocalLoss 
+
+
 class MultiOmicsTrainer:
     """
     Handles the training, validation, checkpointing, and visualization 
@@ -22,10 +25,13 @@ class MultiOmicsTrainer:
                  dynamic_pe_module: nn.Module,
                  device: torch.device,
                  learning_rate: float = 1e-4,
+                 min_lr: float = 1e-6,
                  weight_decay: float = 1e-5,
                  save_dir: str = "checkpoints",
                  viz_dir: str = "viz",
-                 use_dropedge: bool = True): 
+                 use_dropedge: bool = True,
+                 class_weights: torch.Tensor = None,
+                 class_names: list = None): 
         
         self.model = model.to(device)
         self.train_loader = train_loader
@@ -33,6 +39,9 @@ class MultiOmicsTrainer:
         self.dynamic_pe = dynamic_pe_module.to(device)
         self.device = device
         self.use_dropedge = use_dropedge
+        self.class_names = class_names
+        self.min_lr = min_lr
+        self.class_weights = class_weights
         
         # Directories
         self.save_dir = save_dir
@@ -40,14 +49,20 @@ class MultiOmicsTrainer:
         os.makedirs(self.save_dir, exist_ok=True)
         os.makedirs(self.viz_dir, exist_ok=True)
         
-        self.criterion = nn.CrossEntropyLoss()
-        self.optimizer = optim.AdamW(self.model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+        # Turn back weighted CrossEntropyLoss
+        #self.criterion = nn.CrossEntropyLoss(weight=class_weights.to(device) if class_weights is not None else None)
         
+        self.optimizer = optim.AdamW(self.model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+        self.criterion = MultiClassFocalLoss(alpha=self.class_weights, gamma=2, reduction='mean')
         self.best_val_f1 = 0.0
+        
+        self.best_val_preds = []
+        self.best_val_labels = []
         
         self.history = {
             'train_loss': [], 'val_loss': [], 
-            'val_acc': [], 'val_f1': [], 'val_auc': []
+            'val_acc': [], 'val_f1': [], 'val_auc': [],
+            'val_f1_per_class': [] 
         }
 
         # CACHING THE STATIC GRAPH
@@ -125,31 +140,45 @@ class MultiOmicsTrainer:
         avg_loss = total_loss / len(self.val_loader)
         acc = accuracy_score(all_labels, all_preds)
         f1 = f1_score(all_labels, all_preds, average='macro')
+        f1_per_class = f1_score(all_labels, all_preds, average=None)
         
         try:
             auc = roc_auc_score(all_labels, all_probs, multi_class='ovr', average='macro')
         except ValueError:
             auc = 0.0
         
-        return {"val_loss": avg_loss, "val_acc": acc, "val_f1": f1, "val_auc": auc}
-
+        return {
+            "val_loss": avg_loss, "val_acc": acc, "val_f1": f1, "val_auc": auc, 
+            "val_f1_per_class": f1_per_class, 
+            "all_preds": all_preds, "all_labels": all_labels
+        }
 
 
     def fit(self, epochs: int):
         print(f"Starting training on {self.device} for {epochs} epochs...")
+
+        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer, 
+            T_max=epochs, 
+            eta_min=self.min_lr
+        )
         
         for epoch in range(1, epochs + 1):
             train_loss = self._train_epoch()
             val_metrics = self._validate_epoch()
-            
+
+            self.scheduler.step()
+            current_lr = self.scheduler.get_last_lr()[0]
             # Append to history
             self.history['train_loss'].append(train_loss)
             self.history['val_loss'].append(val_metrics['val_loss'])
             self.history['val_acc'].append(val_metrics['val_acc'])
             self.history['val_f1'].append(val_metrics['val_f1'])
             self.history['val_auc'].append(val_metrics['val_auc'])
+            self.history['val_f1_per_class'].append(val_metrics['val_f1_per_class'])
             
             print(f"Epoch {epoch:02d}/{epochs} | "
+                  f"LR: {current_lr:.6f} | "
                   f"Train Loss: {train_loss:.4f} | "
                   f"Val Loss: {val_metrics['val_loss']:.4f} | "
                   f"Val F1: {val_metrics['val_f1']:.4f} | "
@@ -158,11 +187,16 @@ class MultiOmicsTrainer:
             
             if val_metrics['val_f1'] > self.best_val_f1:
                 self.best_val_f1 = val_metrics['val_f1']
+
+                self.best_val_preds = val_metrics['all_preds']
+                self.best_val_labels = val_metrics['all_labels']
                 self._save_checkpoint("best_model.pth")
                 print(">>> New best model saved (Macro F1)!")
                 
         # Generate and save the visualization at the end of training
         self._plot_metrics()
+        self._plot_class_f1()           
+        self._plot_confusion_matrix()
 
     def _save_checkpoint(self, filename: str):
         path = os.path.join(self.save_dir, filename)
@@ -183,7 +217,7 @@ class MultiOmicsTrainer:
         plt.subplot(2, 2, 1)
         plt.plot(epochs, self.history['train_loss'], label='Train Loss', color='blue', marker='o', markersize=4)
         plt.plot(epochs, self.history['val_loss'], label='Val Loss', color='red', marker='o', markersize=4)
-        plt.title('Cross Entropy Loss')
+        plt.title('MultiFocalLoss')
         plt.xlabel('Epochs')
         plt.ylabel('Loss')
         plt.legend()
@@ -218,4 +252,50 @@ class MultiOmicsTrainer:
         
         plt.tight_layout()
         plt.savefig(os.path.join(self.viz_dir, 'training_history.png'), dpi=300, bbox_inches='tight')
+        plt.close()
+
+    def _plot_class_f1(self):
+        """Generates a line plot showing the F1 score evolution for each clinical subtype."""
+        print(f"Generating per-class F1 visualization in {self.viz_dir}/class_f1_history.png ...")
+        epochs = range(1, len(self.history['train_loss']) + 1)
+        
+        # Convert list of arrays to a 2D numpy array: (Epochs, Num_Classes)
+        f1_per_class_history = np.array(self.history['val_f1_per_class']) 
+        
+        plt.figure(figsize=(10, 6))
+        num_classes = f1_per_class_history.shape[1]
+        
+        for c in range(num_classes):
+            label_name = self.class_names[c] if self.class_names else f"Class {c}"
+            plt.plot(epochs, f1_per_class_history[:, c], label=label_name, marker='o', markersize=3)
+            
+        plt.title('Validation F1-Score per Subtype')
+        plt.xlabel('Epochs')
+        plt.ylabel('F1 Score')
+        plt.legend(loc='lower right')
+        plt.grid(True, linestyle='--', alpha=0.6)
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.viz_dir, 'class_f1_history.png'), dpi=300, bbox_inches='tight')
+        plt.close()
+
+    def _plot_confusion_matrix(self):
+        """Generates a Seaborn heatmap confusion matrix for the best epoch's predictions."""
+        from sklearn.metrics import confusion_matrix
+        import seaborn as sns
+        
+        print(f"Generating confusion matrix for best model in {self.viz_dir}/best_model_confusion_matrix.png ...")
+        
+        cm = confusion_matrix(self.best_val_labels, self.best_val_preds)
+        plt.figure(figsize=(8, 6))
+        
+        tick_labels = self.class_names if self.class_names else "auto"
+        
+        sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
+                    xticklabels=tick_labels, yticklabels=tick_labels)
+        
+        plt.title(f'Confusion Matrix (Best Model - Macro F1: {self.best_val_f1:.4f})')
+        plt.xlabel('Predicted Subtype')
+        plt.ylabel('True Subtype')
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.viz_dir, 'best_model_confusion_matrix.png'), dpi=300, bbox_inches='tight')
         plt.close()

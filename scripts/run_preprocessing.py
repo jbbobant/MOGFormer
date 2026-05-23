@@ -16,7 +16,8 @@ def main(args):
     preprocessor = MultiOmicsPreprocessor(
         raw_dir=args.raw_dir,
         processed_dir=args.processed_dir,
-        top_k_genes=args.top_k
+        top_k_genes=args.top_k,
+        curated_genes_file=args.curated_genes # Pass the new argument here
     )
     
     preprocessor.run_pipeline(
@@ -52,11 +53,13 @@ if __name__ == "__main__":
                         help="Directory to output the PyTorch-ready processed files.")
     
     # Hyperparameters
-    parser.add_argument("--top_k", type=int, default=500, 
-                        help="Number of highly variable genes to extract via consensus ranking.")
+    parser.add_argument("--top_k", type=int, default=100, 
+                        help="Total number of genes to extract (Curated + remaining HVGs).")
+    parser.add_argument("--curated_genes", type=str, default="data/raw/CGenes.txt", 
+                        help="Optional: Path to a .txt file of curated genes (one per line) to force-include.")
     parser.add_argument("--pe_method", type=str, default="rwpe", choices=["laplacian", "rwpe"], 
                         help="Method to generate Graph Positional Encodings.")
-    parser.add_argument("--pe_dim", type=int, default=16, 
+    parser.add_argument("--pe_dim", type=int, default=32, 
                         help="Dimensionality of the generated Graph Positional Encodings.")
     
     args = parser.parse_args()
