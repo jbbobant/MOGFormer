@@ -1,0 +1,251 @@
+\documentclass[10pt, twocolumn]{article}
+
+% --- Essential Packages ---
+\usepackage[margin=1.5cm]{geometry} % Narrow margins typical of journals
+\usepackage{graphicx}               % For figures
+\usepackage{authblk}                % For author affiliations
+\usepackage{caption}                % To format figure captions
+\usepackage{amsmath, amssymb, amsfonts} % For math environments
+\usepackage{titlesec}               % To format section headings
+\usepackage{booktabs}               % For tables
+
+% --- Font and Aesthetic Tweaks ---
+\usepackage{mathptmx}               % Times-like font (closest standard to Nature's Minion Pro)
+\usepackage[T1]{fontenc}
+\usepackage[colorlinks=true, allcolors=blue]{hyperref}
+
+% --- Formatting Section Headings ---
+\titleformat{\section}{\large\bfseries}{\thesection.}{0.5em}{}
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection.}{0.5em}{}
+\titleformat{\subsubsection}{\normalsize\itshape}{\thesubsubsection.}{0.5em}{}
+
+% --- Formatting the Abstract ---
+\renewenvironment{abstract}
+ {\small\bfseries}
+ {\par\vspace{1em}}
+
+% --- Title and Author Information ---
+\title{\vspace{-1.5cm} \textbf{MOGFormer: Patient-Specific Multi-Omics Graph Transformer with Hierarchical Pathway Encodings}}
+
+\author[1]{BOBANT Jean-Baptiste\thanks{Corresponding author: bobantjeanbaptiste@gmail.com}}
+
+\affil[1]{\small CentraleSupélec, Paris-Saclay University, France}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+% --- Abstract ---
+\section*{Abstract}
+Accurate stratification of cancer subtypes is essential for personalized therapeutic interventions, yet deep learning models often struggle in the $N \ll p$ regime characteristic of multi-omics datasets. Traditional fusion methods frequently suffer from information routing biases, lazily relying on high-density transcriptomic data while ignoring critical epigenetic and copy-number alterations. Furthermore, standard graph neural networks and transformers often fail to respect established biological topographies. To address these limitations, we present MOGFormer (Patient-Specific Multi-Omics Graph Transformer with Hierarchical Pathway Encodings), an architecture that builds unified gene-level tokens from raw multimodal continuous signals using non-linear feature tokenizers and localized intra-gene cross-attention. To retain macromolecular context, MOGFormer structures its global attention mechanism by embedding a structural inductive bias derived from the shortest path distances of Protein-Protein Interaction (PPI) networks, combined with multiple specialized Latent Pathway Tokens to prevent information bottlenecks. We validate our model on $949$ patients from the TCGA-BRCA cohort across RNA-seq, copy number variations, and methylation profiles to classify PAM50 breast cancer subtypes. Beyond predictive performance, MOGFormer offers native, multi-tiered interpretability, mapping global patient states directly back to single-gene multimodal driver mechanisms without the need for post-hoc explanatory frameworks.
+
+
+% --- Main Text ---
+
+\section*{Introduction}
+
+In the era of precision oncology, leveraging machine learning for in silico biological discovery requires architectures that can simultaneously navigate vast feature spaces and yield mechanistic insights. Traditional early-fusion machine learning models often outperform deep neural networks on multi-omics cohorts due to the acute $N \ll p$ regime, where the lack of structural constraints leads to smooth gradient overfitting. To embed biological reality into deep models, Graph Neural Networks (GNNs) have emerged as a powerful paradigm, utilizing known Gene Regulatory Networks (GRNs) or Protein-Protein Interaction (PPI) networks as structural inductive biases. However, standard message-passing GNNs suffer from two fundamental architectural flaws: the "oversquashing" of information into local neighborhoods during localized aggregations, and an inherent inability to discover de novo or context-specific genetic interactions beyond the static, hard-coded edges of the input graph prior.
+
+To transcend these limitations, we propose extending the transformer architecture to biological graphs through \texttt{MOGFormer} (Patient-Specific Multi-Omics Graph Transformer). By utilizing global self-attention parametrized by a soft structural bias, our model prevents information bottlenecks while allowing the network to dynamically learn long-range genetic dependencies that are missing from static databases. 
+
+Crucially, cellular state is not driven by transcriptomics alone; it is governed by a complex, multi-tiered epigenetic and structural landscape. \texttt{MOGFormer} models this by capturing the distinct biological signals of three primary modalities:
+\begin{itemize}
+    \item \textbf{RNA-sequencing (mRNA):} Reflects the continuous, high-density downstream transcriptional output and absolute functional state of the cell.
+    \item \textbf{Copy Number Variations (CNV):} Captures discrete, structural genomic alterations—such as focal amplifications of oncogenes or deletions of tumor suppressors—that dictate baseline expression boundaries.
+    \item \textbf{Methylation Beta-Values:} Measures localized chemical modifications (epigenetic hyper- or hypo-methylation) occurring at CpG islands, which dynamically silence or activate gene transcription.
+\end{itemize}
+Rather than treating these profiles as disjoint vectors, our architecture explicitly models their intra-gene cross-talk (e.g., methylation-driven silencing of transcript expression) prior to global state computation.
+
+We validate this framework on the clinical task of breast cancer stratification using the The Cancer Genome Atlas Breast Invasive Carcinoma (TCGA-BRCA) cohort. Breast cancer is a highly heterogeneous disease, conventionally classified into distinct molecular subtypes via the PAM50 micro-array panel (Basal-like, HER2-enriched, Luminal A, Luminal B, and Normal-like). These subtypes are directly linked to distinct clinical prognosis, survival rates, and targeted therapeutic strategies due to their underlying receptor status (Estrogen Receptor, Progesterone Receptor, and Human Epidermal Growth Factor Receptor 2). 
+
+While achieving robust classification on these subtypes is essential, the core paradigm shift of \texttt{MOGFormer} lies not in state-of-the-art performance hacking, but in its native, multi-tiered interpretability. By looking past post-hoc, computationally expensive explanatory frameworks (such as LRP or SHAP), our architecture’s internal routing mechanics allow researchers to perform a clean, deep drill-down: isolating exactly which global pathways drove a patient's classification, which specific driver genes anchored those pathways, and which underlying omics modality dictated that anomalous gene state.
+
+
+
+\section{Dataset and preprocessing}
+
+\subsection{Dataset}
+
+The data used in this study comes from TCGA BRCA, by filtering on women patients having both RNA-seq, copy number variations and methylation beta-values data for genes of interest, we obtained a total of 949 patients. Our first goal here beeing to classify the patients depending on their breast cancer subtype based on PAM50 classification, our dataset accounts for 166 Basal, 77 Her2, 480 Luminal A, 194 Luminal B and 35 Normal-like tumor. 
+
+\subsection{Preprocessing}
+
+\textbf{Alignment and Splitting.} 
+
+Rigorous preprocessing is critical to prevent data leakage and ensure scale uniformity. Let the raw inputs be $\mathbf{X}_{mRNA}$, $\mathbf{X}_{CNV}$, and $\mathbf{X}_{methy}$, alongside a clinical vector $\mathbf{Y}$. Only patients existing across all three modalities and the clinical dataset are retained. A stratified split is performed \textit{prior} to any statistical calculation.\vspace{0.3cm}
+\noindent
+\textbf{Highly Variable Gene (HVG) Selection.} 
+
+To extract the $N$ most informative genes while remaining robust to biological outliers, we utilize the Median Absolute Deviation (MAD), fitted strictly on the training set:
+\begin{equation}
+    \text{MAD}(\mathbf{x}) = \text{median}(|\mathbf{x} - \text{median}(\mathbf{x})|)
+\end{equation}
+Genes are ranked independently for each modality. The consensus rank is calculated as:
+\begin{equation}
+    \text{Rank}_{cons} = \text{Rank}_{mRNA} + \text{Rank}_{CNV} + \text{Rank}_{methy}
+\end{equation}
+The top $N$ genes with the lowest consensus rank are selected.\vspace{0.3cm}
+
+\noindent
+\textbf{Modality-Specific Normalization.} 
+
+Normalization parameters are fitted on the training split and transformed globally. For RNA-seq, we apply $\mathbf{x}_{mRNA}' = \text{StandardScale}(\ln(\mathbf{x}_{mRNA} + 1))$. For CNV and Methylation, we apply standard scaling: $\mathbf{x}' = \text{StandardScale}(\mathbf{x})$.
+
+
+
+\section{Architectural Formulation}
+
+\subsection{Non-Linear Modality Lifting}
+Genomic and epigenomic variations do not scale in a purely linear fashion; biological mechanisms operate on discrete physiological thresholds. Passing a single scalar continuous value through a standard linear layer forces the geometric representation onto a straight line, severely restricting the network's capacity.
+
+For each patient and selected gene $i \in \{1, \dots, N\}$, the scalar values are projected into a continuous, $d$-dimensional space ($d=128$). To map complex non-linear thresholds, we replace linear projections with Feature Tokenizers—individual Multi-Layer Perceptrons (MLPs). Learnable modality embeddings $\mathbf{E}_m, \mathbf{E}_c, \mathbf{E}_t \in \mathbb{R}^d$ are added to encode biological origin:
+
+\begin{align}
+    \mathbf{z}_{m,i} &= \text{MLP}_{mRNA}(x_{m,i}) + \mathbf{E}_{m} \\
+    \mathbf{z}_{c,i} &= \text{MLP}_{CNV}(x_{c,i}) + \mathbf{E}_{c} \\
+    \mathbf{z}_{t,i} &= \text{MLP}_{methy}(x_{t,i}) + \mathbf{E}_{t}
+\end{align}
+Where each MLP consists of \texttt{Linear} $\rightarrow$ \texttt{LayerNorm} $\rightarrow$ \texttt{GELU} $\rightarrow$ \texttt{Linear}.
+
+\subsection{Intra-Gene Fusion \& Symmetrical Masking}
+To model local, non-linear epigenetic and transcriptomic interactions (e.g., methylation silencing of mRNA expression), we employ a local cross-attention mechanism inside each gene. We formulate the input sequence for gene $i$ by prepending a learnable classification token $\mathbf{z}_{cls}$: [BERT]
+\begin{equation}
+    \mathbf{X}_i = \begin{bmatrix} \mathbf{z}_{cls} \\ \mathbf{z}_{m,i} \\ \mathbf{z}_{c,i} \\ \mathbf{z}_{t,i} \end{bmatrix} \in \mathbb{R}^{4 \times d}
+\end{equation}
+
+\noindent
+\textbf{Unimodal Dropout:} 
+
+High-throughput data is inherently noisy. Masking only one modality creates an information routing bias. We enforce cross-modal redundancy by allowing \textit{one} of the biological channels to be independently masked with probability $p_{drop}$:
+\begin{equation}
+    \tilde{\mathbf{z}}_{k,i} = \begin{cases} 
+      \mathbf{0}, & \text{prob. } p_{drop} \\
+      \mathbf{z}_{k,i}, & \text{otherwise}
+   \end{cases} \quad \forall k \in \{m, c, t\}
+\end{equation}
+
+To avoid the case where the three modalities are masked and therefore creating a completely silenced gene, we ensure that at most one modality is masked. Therefore allowing the model to 'impute' the missing modality from the two that have not been masked. 
+
+
+It is important to know that the most used of the three modalities is RNA-seq because of its information density, therefore combining other modalities with RNA-seq often ends up in a model lazily relying only on RNA-seq, ignoring thus the other modalities. It is then specifically paramout to introduce a higher dropout rate to RNA-seq to avoid this.\vspace{0.3cm}
+
+\noindent
+\textbf{Intra-Gene Attention:} We apply multi-head self-attention (MHA). Using the Pre-LayerNorm formulation:
+\begin{equation}
+    \mathbf{X}_i^{'} = \mathbf{X}_i + \text{MHA}(\text{LN}(\mathbf{X}_i))
+\end{equation}
+The unified biological representation of gene $i$, denoted $\mathbf{h}_i$, is extracted as the updated state of the classification token: $\mathbf{h}_i = \mathbf{X}_{i,0}^{''} \in \mathbb{R}^d$.
+
+\subsection{Global Transformer \& Biased Attention}
+Biological networks are dense structural priors. Standard transformers treat the genome as a uniform clique, ignoring local canonical pathways. To respect these pathways, we mathematically bias the attention matrix using the Shortest Path Distance (SPD) of the PPI network.
+
+For a distance matrix $\mathbf{D}_{SPD}$, each attention head $h$ learns an embedding vector. We apply a $\tanh$ activation to bound the bias, preventing Softmax collapse and disparate value ranges from destroying the gradients:
+\begin{equation}
+    \mathbf{B}_{spatial}^{(h)} = \tanh\left(\text{Embed}^{(h)}(\mathbf{D}_{SPD})\right)
+\end{equation}
+
+\noindent
+
+\newpage
+\textbf{Tumor Token extraction} 
+
+We use a classification token \texttt{[TUMOR\_CLS]} to retrieve information from all genes acting as a sponge :
+
+
+\begin{equation}
+    \mathbf{H}^{(0)} = [\mathbf{t}_{cls},, \mathbf{h}_1, \dots, \mathbf{h}_N]
+\end{equation}
+
+The spatial bias $\mathbf{B}_{spatial}^{(h)}$ is injected directly into the Attention process with the same wheight as the complete attention thanks to the separate row-wise softmax functions:
+\begin{equation}
+    \text{Attn}^{(h)} = \text{softmax}\left(\frac{\mathbf{Q}\mathbf{K}^\top}{\sqrt{d_k}}\right)\mathbf{V} + \text{softmax}(\mathbf{B}_{spatial}^{(h)})\mathbf{V}
+\end{equation}\vspace{0.3cm}
+
+We apply a row-wise softmax on each of the attention contribution in order to scale them as recommended by \textit{Graphormer Boosted: Molecular Property Prediction With Enhanced Graph Spatial and Edge Encodings, SARAH A. FADLALLAH, 2025 }
+\noindent
+\textbf{Dynamic DropEdge Regularization.} 
+
+During training, edges from the base PPI network can be randomly dropped at each epoch with probability $q_{drop} \approx 0.10$ to prevent overfitting to hub genes:
+\begin{equation}
+    \tilde{\mathbf{A}}_{jk} = \begin{cases} 
+      0, & \text{with prob. } q_{drop} \\
+      \mathbf{A}_{jk}, & \text{otherwise}
+   \end{cases}
+\end{equation}
+
+We observed that the model yet performs better without this regularization but it can be a great idea to push it further later. 
+
+\subsection{Classification \& Dampened Focal Loss}
+The $K$ updated pathway tokens are extracted from the final layer $\mathbf{H}^{(L)}$ and aggregated via an MLP to form the systemic tumor state:
+\begin{equation}
+    \mathbf{u}_{tumor} = \text{MLP}_{agg}\left([\mathbf{t}_{p_1}^{(L)}, \dots, \mathbf{t}_{p_K}^{(L)}]\right) \in \mathbb{R}^d
+\end{equation}
+
+To enforce aggressive regularization against feature collapse, subtype probabilities are generated via a bottleneck MLP, where $\mathbf{W}_1$ compresses the state from $d \rightarrow d/2$:
+\begin{equation}
+    \hat{\mathbf{y}} = \mathbf{W}_2(\text{GELU}(\text{BatchNorm}(\mathbf{W}_1\mathbf{u}_{tumor} + \mathbf{b}_1)))
+\end{equation}
+
+The network is optimized using a Multi-Class Focal Loss. To balance precision and recall on extreme minority classes (preventing "safe guess" hedging), we apply Square-Root Dampened inverse class frequencies ($\alpha_c = \sqrt{1 / N_c}$).
+
+\section{Native Interpretability}
+The architecture inherently supports interpretability without external algorithms like LRP:
+\begin{itemize}
+    \item \textbf{Global Driver Extraction:} Easily extracting the attention weights from the final global layer to identify the top $K$ driver genes heavily attended to by the latent pathway tokens.
+    \item \textbf{Deep Drill-Down:} For the identified driver genes, we can inspect the internal $4 \times 4$ attention matrix of their respective Mini-Transformer to isolate which omics modality drove the anomalous gene token state.
+\end{itemize}
+
+\section{Self-Supervised Pre-Training \& Pan-Cancer Foundation Modeling}
+
+To fundamentally mitigate the acute $N \ll p$ data scarcity constraint in specialized clinical target cohorts, we implement a Self-Supervised Pre-Training framework. Rather than training the architecture exclusively end-to-end on a localized target task, we utilize unlabeled Pan-Cancer multi-omics data across all available cohorts in TCGA to construct an oncogenic foundation model. Through this paradigm, the network is forced to learn a generalized, continuous representation of cancer biology and multi-modal regulatory mechanisms before downstream task adaptation.
+
+\subsection{Masking Strategy and Multi-Modal Reconstruction}
+
+The next step with the model is to pre-train it with a full pan-cancer cohort so it understands the underlying cancer biology rather than overfitting on a small cohort of bresat cancer patients. This process still needs to be revised before running. 
+
+During the self-supervised pre-training phase, the classification and latent pathway tokens are omitted or ignored in the loss calculation. For each patient profile in the Pan-Cancer cohort, a random subset $\mathcal{M}$ containing $15\%$ of the selected universe of genes $N$ is selected for masking. 
+
+Because our architecture relies on continuous scalar values passing through non-linear feature tokenizers rather than discrete vocabulary tokens, we apply masking directly at the input level. For any gene $i \in \mathcal{M}$, its continuous scalar values across all three active modalities (mRNA, CNV, and Methylation) are replaced with a learnable, multi-modal mask token vector $\mathbf{z}_{mask} \in \mathbb{R}^d$, effectively bypassing the individual modality MLPs for that specific gene token:
+
+\begin{equation}
+    \mathbf{h}_i^{(0)} = \mathbf{z}_{mask} \quad \forall i \in \mathcal{M}
+\end{equation}
+
+The partially masked sequence is then propagated through the global, structurally biased Transformer layers. Let $\mathbf{h}_i^{(L)} \in \mathbb{R}^d$ denote the final hidden state of the masked gene $i$ after $L$ global attention layers. To enforce the model to dynamically leverage the surrounding biological context, guided by the PPI and GRN spatial biases, we append a multi-head regression projection head ($\text{MLP}_{recon}$) to reconstruct the original normalized continuous values:
+
+\begin{equation}
+    [\hat{x}_{m,i}, \hat{x}_{c,i}, \hat{x}_{t,i}] = \text{MLP}_{recon}\left(\mathbf{h}_i^{(L)}\right)
+\end{equation}
+
+The model is optimized using a masked Mean Squared Error (MSE) loss, computed exclusively over the set of corrupted features:
+
+\begin{equation}
+    \mathcal{L}_{MGM} = \frac{1}{|\mathcal{M}|} \sum_{i \in \mathcal{M}} \sum_{k \in \{m, c, t\}} \left( x_{k,i} - \hat{x}_{k,i} \right)^2
+\end{equation}
+
+\subsection{Downstream Fine-Tuning and Layer Freezing}
+
+Following convergence on the Pan-Cancer dataset, the reconstruction head $\text{MLP}_{recon}$ is discarded. The pre-trained weights of the non-linear feature tokenizers, intra-gene cross-attention mini-transformers, and lower global transformer layers are frozen to preserve the learned foundational rules of homeostatic and oncogenic gene regulation. 
+
+To adapt the model to specific target clinical tasks, such as the PAM50 breast cancer subtype classification, the specialized Latent Pathway Tokens and top global classification layers are randomly initialized. These upper layers are then fine-tuned using the Dampened Focal Loss on the target dataset. This hierarchical freezing strategy ensures that the model acts as an efficient feature extractor rooted in deep biological priors, significantly reducing the sample complexity required to achieve high performance on rare or constrained clinical subsets.
+
+% --- Methods Section ---
+
+\section*{Methods}
+
+\subsection*{Graph Construction and Spatial Bias Embedding}
+The foundational biological prior is constructed using the Human Protein-Protein Interaction (PPI) network from STRINGdB. Let $G = (V, E)$ represent the network where vertices $V$ denote the consensus universe of selected High Variable Genes ($N$), and edges $E$ correspond to validated physical or functional interactions. The Shortest Path Distance matrix $\mathbf{D}_{SPD} \in \mathbb{R}^{N \times N}$ is computed using Dijkstra's algorithm with a maximum distance cutoff $D_{max} = 5$; any pairs lacking a valid path within this threshold are assigned a default distance of $D_{max} + 1$. 
+
+The spatial bias matrix $\mathbf{B}_{spatial}^{(h)}$ for each attention head $h$ is generated by mapping each discrete distance integer in $\mathbf{D}_{SPD}$ to a learnable scalar weight via an embedding lookup table, bounded by a hyperbolic tangent activation function to preserve gradient stability.
+
+\subsection*{Model Optimization and Training Hyperparameters}
+MOGFormer is trained end-to-end utilizing the AdamW optimizer with a learning rate of $\eta = 10^{-4}$ and weight decay of $\lambda = 1^{-4}$. The architecture uses an internal token dimensionality of $d=128$, $L=4$ global transformer layers, and $K=8$ latent pathway tokens. To address extreme class imbalances present within the PAM50 cohort (e.g., Normal-like tumors), optimization is driven by a Multi-Class Focal Loss, parameterized with $\gamma = 2.0$ and dampening weights scaled by the square-root inverse frequency of each class.
+
+
+% --- References ---
+\normalsize
+% \bibliographystyle{naturemag}
+% \bibliography{your_bib_file}
+
+\end{document}

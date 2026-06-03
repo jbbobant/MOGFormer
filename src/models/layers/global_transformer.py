@@ -1,14 +1,18 @@
 import torch
 import torch.nn as nn
 from typing import Tuple
+import torch.nn.functional as F
+
+from src.models.layers.Structural_attention_block import StructuralAttentionBlock
 
 class GlobalGraphTransformer(nn.Module):
     """
     Inter-Gene Network: Discovers distant trans-regulatory mechanisms across all genes
     using FlashAttention and Graph Positional Encodings.
     """
-    def __init__(self,base_adj: torch.Tensor, d: int = 64, pe_dim: int = 16, num_heads: int = 8, 
-                 num_layers: int = 4, dim_feedforward: int = 256, dropout: float = 0.1 ):
+    def __init__(self, d: int = 64, pe_dim: int = 16, num_heads: int = 8, 
+                 num_layers: int = 4, dim_feedforward: int = 256,
+                 max_dist: int = 5, attention_mode: str = "boosted",dropout: float = 0.1):
         """
         Args:
             d: Token dimension (default 64)
@@ -17,42 +21,34 @@ class GlobalGraphTransformer(nn.Module):
             num_layers: Number of transformer L layers
             dim_feedforward: Hidden dimension of the feed-forward network
             dropout: Attention and FFN dropout
-            base_adj: Adjacency Matrix of GRN, PPI...
         """
         super(GlobalGraphTransformer, self).__init__()
         self.d = d
-        self.register_buffer('base_adj', base_adj.float())
         
         # 1. Structural Injection (Graph PE Projector)
         # Projector for the concatenated features (from pe_dim + d to d)
-
         self.concat_projector = nn.Linear(d + pe_dim, d)
         
         # 2. The Global Sponge: Master [TUMOR_CLS] Token
         # Shape: (1, 1, d) to broadcast across the batch size
-
         self.tumor_cls = nn.Parameter(torch.randn(1, 1, d))
         nn.init.normal_(self.tumor_cls, mean=0.0, std=0.02)
         
         # 3. Linear Self-Attention Layers (FlashAttention)
         # In PyTorch 2.0+, batch_first=True natively triggers FlashAttention backend
         # for highly efficient memory usage, satisfying the O(N) requirement.
-
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d, 
-            nhead=num_heads, 
-            dim_feedforward=dim_feedforward, 
-            dropout=dropout,
-            batch_first=True,
-            activation="gelu",
-            norm_first=True # Pre-LN architecture
-        )
-
-        self.transformer_layers = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
-
-        self.graph_bias_scalar = nn.Parameter(torch.tensor([0.5]))
-
-    def forward(self, h: torch.Tensor, e_graph: torch.Tensor, base_adj: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        self.layers = nn.ModuleList([
+            StructuralAttentionBlock(
+                d_model=d, 
+                num_heads=num_heads, 
+                dim_feedforward=dim_feedforward,
+                max_dist=max_dist,
+                mode=attention_mode,
+                dropout=dropout
+            ) for _ in range(num_layers)
+        ])
+        
+    def forward(self, h: torch.Tensor, e_graph: torch.Tensor, spd_matrix: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
             h: Unified gene representations from Mini-Transformers. Shape (Batch, N_genes, d)
@@ -62,13 +58,7 @@ class GlobalGraphTransformer(nn.Module):
             tumor_state: The final state of the [TUMOR_CLS] token. Shape (Batch, d)
             H_final: The full sequence output for potential downstream tasks. Shape (Batch, N_genes + 1, d)
         """
-        structural_bias = (self.base_adj - 1.0) * 2.0  # (N, N)
-
         B, N, D = h.shape
-
-        full_bias = torch.zeros(N + 1, N + 1, device=h.device)
-        
-        full_bias[1:, 1:] = structural_bias * self.graph_bias_scalar
 
         # -- STRUCTURAL INJECTION (Concatenation & Projection) --
         # 1. Expand e_graph to match the batch size: (N_genes, pe_dim) -> (Batch, N_genes, pe_dim)
@@ -85,10 +75,11 @@ class GlobalGraphTransformer(nn.Module):
         # -- THE GLOBAL SPONGE --
         tumor_cls_expanded = self.tumor_cls.expand(B, 1, D)
         sequence = torch.cat([tumor_cls_expanded, H_0], dim=1)
-    
-        H_final = self.transformer_layers(sequence, mask = full_bias)
-    
-        # Extract the final state of the [TUMOR_CLS] token (Index 0)
-        tumor_state = H_final[:, 0, :]
-        
-        return tumor_state, H_final
+
+        padded_spd = F.pad(spd_matrix, (1, 0, 1, 0), value=0)
+
+        H_curr = sequence
+        for layer in self.layers:
+            H_curr = layer(H_curr, padded_spd)
+            
+        return H_curr[:, 0, :], H_curr

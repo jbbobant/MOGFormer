@@ -220,6 +220,7 @@ __marimo__/
 # Project specific directories
 viz/
 data/
-checkpoints/
-Results/
+
+results/
 .pdf
+.tex

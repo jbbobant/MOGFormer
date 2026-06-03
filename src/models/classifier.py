@@ -2,10 +2,10 @@ import torch
 import torch.nn as nn
 from typing import Dict, Tuple
 
-# Assuming these are imported from your local project structure
-from .layers.modality_lifting import ModalityLifting
-from .layers.mini_transformer import MiniTransformer
-from .layers.global_transformer import GlobalGraphTransformer
+
+from src.models.layers.modality_lifting import ModalityLifting
+from src.models.layers.mini_transformer import MiniTransformer
+from src.models.layers.global_transformer import GlobalGraphTransformer
 
 class MultiOmicsGraphClassifier(nn.Module):
     """
@@ -14,7 +14,6 @@ class MultiOmicsGraphClassifier(nn.Module):
     to predict breast cancer subtypes.
     """
     def __init__(self, 
-                 base_adj: torch.Tensor,
                  num_classes: int = 5, 
                  d: int = 64, 
                  pe_dim: int = 16,
@@ -24,7 +23,9 @@ class MultiOmicsGraphClassifier(nn.Module):
                  dropout: float = 0.1,
                  rna_dropout_prob: float = 0.15,
                  meth_dropout_prob: float = 0.15,
-                 cnv_dropout_prob: float = 0.15 ):
+                 cnv_dropout_prob: float = 0.15,
+                 max_dist: int = 5,
+                 attention_mode: str = "boosted"):
         """
         Args:
             num_classes: Number of clinical subtypes (e.g., 5 for BRCA)
@@ -32,7 +33,7 @@ class MultiOmicsGraphClassifier(nn.Module):
             pe_dim: Dimensionality of Graph Positional Encodings
         """
         super(MultiOmicsGraphClassifier, self).__init__()
-        self.base_adj = base_adj
+        
         self.d = d
         self.num_classes = num_classes
         
@@ -54,20 +55,20 @@ class MultiOmicsGraphClassifier(nn.Module):
             d=d, 
             pe_dim=pe_dim, 
             num_heads=global_heads, 
-            num_layers=global_layers, 
-            dropout=dropout,
-            base_adj=base_adj
+            num_layers=global_layers,
+            max_dist=max_dist,
+            attention_mode=attention_mode,
+            dropout=dropout
         )
         
         # 4. Classification Head (MLP)
         # Passes the [TUMOR_CLS] token through an MLP to predict subtypes.
         self.classifier_head = nn.Sequential(
-            nn.Linear(d, d // 2),
-            nn.BatchNorm1d(d // 2),
+            nn.Linear(d, d//2),          
+            nn.BatchNorm1d(d//2),
             nn.GELU(),
             nn.Dropout(dropout),
-            nn.Linear(d // 2, num_classes)
-            # Note: Softmax is omitted here for nn.CrossEntropyLoss stability.
+            nn.Linear(d//2, num_classes) 
         )
 
     def forward(self, 
@@ -75,6 +76,7 @@ class MultiOmicsGraphClassifier(nn.Module):
                 cnv: torch.Tensor, 
                 methy: torch.Tensor, 
                 e_graph: torch.Tensor,
+                spd_matrix: torch.Tensor,
                 return_attention: bool = False) -> Dict[str, torch.Tensor]:
         """
         Args:
@@ -92,7 +94,7 @@ class MultiOmicsGraphClassifier(nn.Module):
         h, intra_attn_weights = self.mini_transformer(z_m, z_c, z_t)
         
         # Step 3: Global Transformer -> Structural injection and [TUMOR_CLS] aggregation
-        tumor_state, H_final = self.global_transformer(h, e_graph, self.base_adj)
+        tumor_state, H_final = self.global_transformer(h, e_graph, spd_matrix)
         
         # Step 4: Subtype Prediction -> MLP on the final [TUMOR_CLS] state 
         logits = self.classifier_head(tumor_state)

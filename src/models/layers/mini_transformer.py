@@ -51,22 +51,43 @@ class MiniTransformer(nn.Module):
         """
         B, N, D = z_m.shape
         
-        # -- REGULARIZATION: Modality Dropout --
-        # Randomly zero-out the  embedding for a percentage of genes in a batch during training
-        # Create independent random masks for each modality channel
+        # -- REGULARIZATION: Exclusive Modality Dropout (Max 1 Drop) --
+        if self.training:
+            # 1. Roll a single die for each gene in the batch
+            # Shape: (Batch, N_genes, 1)
+            rand_vals = torch.rand(B, N, 1, device=z_m.device)
+            
+            # 2. Define the cumulative probability thresholds
+            t_rna = self.rna_dropout_prob
+            t_cnv = t_rna + self.cnv_dropout_prob
+            t_methy = t_cnv + self.meth_dropout_prob
+            
+            # Sanity check (can be removed in production)
+            if t_methy > 1.0:
+                raise ValueError("Sum of dropout probabilities exceeds 1.0!")
 
-        if self.training and self.rna_dropout_prob > 0.0:
-            mask_rna = (torch.rand(B, N, 1, device=z_m.device) > self.rna_dropout_prob).float()
+            # 3. Initialize all masks to 1.0 (Keep everything)
+            mask_rna = torch.ones(B, N, 1, device=z_m.device)
+            mask_cnv = torch.ones(B, N, 1, device=z_c.device)
+            mask_methy = torch.ones(B, N, 1, device=z_t.device)
+
+            # 4. Apply exclusive drops using the partitioned thresholds
+            mask_rna = mask_rna.masked_fill(rand_vals < t_rna, 0.0)
+            
+            mask_cnv = mask_cnv.masked_fill(
+                (rand_vals >= t_rna) & (rand_vals < t_cnv), 0.0
+            )
+            
+            mask_methy = mask_methy.masked_fill(
+                (rand_vals >= t_cnv) & (rand_vals < t_methy), 0.0
+            )
+
+            # 5. Apply the safe, exclusive masks to the tensors
             z_m = z_m * mask_rna
-
-        if self.training and self.meth_dropout_prob > 0.0:
-            mask_methy = (torch.rand(B, N, 1, device=z_t.device) > self.meth_dropout_prob).float()
+            z_c = z_c * mask_cnv
             z_t = z_t * mask_methy
 
-        if self.training and self.cnv_dropout_prob > 0.0:
-            mask_cnv = (torch.rand(B, N, 1, device=z_c.device) > self.cnv_dropout_prob).float()
-            z_c = z_c * mask_cnv
-
+            
         # -- SEQUENCE FORMULATION --
         # Stack modalities to shape: (Batch, N_genes, 3, d)
         modalities = torch.stack([z_m, z_c, z_t], dim=2)
