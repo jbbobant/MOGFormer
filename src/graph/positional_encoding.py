@@ -39,7 +39,7 @@ class GraphPositionalEncoding(nn.Module):
             Pk = torch.matmul(Pk, P)
         return torch.stack(outs, dim=1)                   # (N, pe_dim)
 
-    # ---- normalized-Laplacian eigenvectors (from legacy graph_utils) ----
+    # ---- normalized-Laplacian eigenvectors  ----
     def _laplacian(self, A: torch.Tensor) -> torch.Tensor:
         import scipy.sparse as sp
         from scipy.sparse.linalg import eigsh

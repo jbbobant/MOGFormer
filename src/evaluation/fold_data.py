@@ -67,7 +67,7 @@ def load_omics(
     raw_dir: str,
     rna_file: str = "data_rna_seq_v2_rsem.csv",
     cnv_file: str = "data_cnv.csv",
-    methy_file: str = "data_methylation450.csv",
+    methy_file: str = "data_methylation_M.csv",
     clin_file: str = "data_clinical.csv",
     label_col: str = "SUBTYPE",
 ) -> OmicsData:

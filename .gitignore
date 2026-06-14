@@ -222,5 +222,6 @@ viz/
 data/
 
 results/
+save/
 .pdf
 .tex

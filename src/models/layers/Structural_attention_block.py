@@ -6,12 +6,12 @@ import math
 class StructuralAttentionBlock(nn.Module):
     """Combines StructuralGraphAttention with LayerNorms and FFN (Pre-LN style)"""
     def __init__(self, d_model: int, num_heads: int, dim_feedforward: int, 
-                 max_dist: int, mode: str, dropout: float):
+                 max_dist: int, mode: str, dropout: float, lambda_gate: bool = False):
         super().__init__()
         self.norm1 = nn.LayerNorm(d_model)
         self.attn = StructuralGraphAttention(
-            d_model=d_model, num_heads=num_heads, max_dist=max_dist, mode=mode, dropout=dropout
-        )
+            d_model=d_model, num_heads=num_heads, max_dist=max_dist, mode=mode, 
+            dropout=dropout, lambda_gate = lambda_gate)
         self.norm2 = nn.LayerNorm(d_model)
         self.ffn = nn.Sequential(
             nn.Linear(d_model, dim_feedforward),
@@ -29,14 +29,14 @@ class StructuralAttentionBlock(nn.Module):
 
 class StructuralGraphAttention(nn.Module):
     """
-    Multi-Head Attention supporting both Standard Graphormer 
-    and Graphormer Boosted spatial bias injections.
+    Multi-Head Attention
     """
-    def __init__(self, d_model: int, num_heads: int, max_dist: int = 5, mode: str = 'boosted', dropout: float = 0.1):
+    def __init__(self, d_model: int, num_heads: int, max_dist: int = 5, 
+                 mode: str = 'inside', dropout: float = 0.1, lambda_gate: bool = False):
         super().__init__()
         self.num_heads = num_heads
         self.d_head = d_model // num_heads
-        self.mode = mode  # 'standard' or 'boosted'
+        self.mode = mode  # 'inside' or 'dual'
         
         # Linear projections
         self.q_proj = nn.Linear(d_model, d_model)
@@ -49,6 +49,11 @@ class StructuralGraphAttention(nn.Module):
         self.spatial_embedding = nn.Embedding(max_dist + 2, num_heads)
         
         self.attn_drop = nn.Dropout(dropout)
+        
+        self.lambda_gate = lambda_gate
+        if lambda_gate:
+            # softplus(0.5413) ≈ 1.0 — λ starts at neutral scale, free to grow or shrink
+            self.lambda_raw = nn.Parameter(torch.full((num_heads,), 0.5413))
         
     def forward(self, h: torch.Tensor, spd_matrix: torch.Tensor) -> torch.Tensor:
         """
@@ -76,25 +81,28 @@ class StructuralGraphAttention(nn.Module):
         spatial_bias = torch.tanh(spatial_bias)
         
         # 4. Attention Score Unification
-        if self.mode == 'standard':
+        if self.mode == 'inside':
+            if self.lambda_gate:
+                scale = F.softplus(self.lambda_raw).view(1, self.num_heads, 1, 1)
+                spatial_bias = scale * spatial_bias   # per-head magnitude, shape still broadcasts
             # Original Graphormer: A = softmax(S + B)
             raw_attn = s_matrix + spatial_bias
             attn_weights = F.softmax(raw_attn, dim=-1)
             
-        elif self.mode == 'boosted':
-            # Graphormer Boosted: A = softmax(S) + softmax(B) [cite: 425, 431]
+        elif self.mode == 'dual':
+            # Graphormer dual: A = softmax(S) + softmax(B) [cite: 425, 431]
             s_norm = F.softmax(s_matrix, dim=-1)
             b_norm = F.softmax(spatial_bias, dim=-1)
             # Re-normalize to ensure rows sum to 1
             attn_weights = (s_norm + b_norm) / 2.0
             
         else:
-            raise ValueError("Mode must be either 'standard' or 'boosted'.")
+            raise ValueError("Mode must be either 'inside' or 'dual'.")
             
         attn_weights = self.attn_drop(attn_weights)
         
         # 5. Apply to values and project
         out = torch.matmul(attn_weights, v)
         out = out.transpose(1, 2).contiguous().view(B, N, -1)
-        
+            
         return self.out_proj(out)

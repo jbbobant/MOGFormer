@@ -12,7 +12,7 @@ class GlobalGraphTransformer(nn.Module):
     """
     def __init__(self, d: int = 64, pe_dim: int = 16, num_heads: int = 8, 
                  num_layers: int = 4, dim_feedforward: int = 256,
-                 max_dist: int = 5, attention_mode: str = "boosted",dropout: float = 0.1):
+                 max_dist: int = 5, attention_bias_mode: str = "dual",dropout: float = 0.1, lambda_gate: bool = False):
         """
         Args:
             d: Token dimension (default 64)
@@ -43,8 +43,9 @@ class GlobalGraphTransformer(nn.Module):
                 num_heads=num_heads, 
                 dim_feedforward=dim_feedforward,
                 max_dist=max_dist,
-                mode=attention_mode,
-                dropout=dropout
+                mode=attention_bias_mode,
+                dropout=dropout,
+                lambda_gate=lambda_gate
             ) for _ in range(num_layers)
         ])
         

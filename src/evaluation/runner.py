@@ -23,54 +23,63 @@ from torch.utils.data import DataLoader
 import pandas as pd
 import yaml
 
-from src.evaluation import fold_plots
+
 from src.evaluation.cv import  load_folds
-from src.evaluation.fold_data import load_omics, load_curated_genes
+from src.evaluation.fold_data import load_omics, load_curated_genes, OmicsData
 from src.evaluation.fold_metrics import compute_fold_metrics, fold_confusion, aggregate
 from src.evaluation.fold_preprocess import MultiOmicsTransformer
+from src.evaluation.fold_plots import save_monitoring_figures
 from src.graph.string_graph import StringGraphCache
 from src.graph.positional_encoding import GraphPositionalEncoding
 from src.graph.spd import compute_shortest_path_matrix
 from src.utils.loss import MultiClassFocalLoss
 from src.models.classifier import MultiOmicsGraphClassifier
-
+from src.evaluation.pretrained_emb import load_archs4_embeddings
+from src.utils.seed import seed_everything
 
 # --------------------------------------------------------------------------
 @dataclass
 class MOGFormerConfig:
     # ---- locked BASELINE (script.py) ----
-    d: int = 128                        # embbeding dimension
-    pe_dim: int = 32                    # positional encoding dimension
-    pe_method: str = "rwpe"             # "rwpe" | "laplacian" 
-    mini_heads: int = 4                 # number of mini-transformer heads
-    global_heads: int = 8               # number of global-transformer heads
-    global_layers: int = 1              # number of global-transformer layers
-    dropout: float = 0.2                # global dropout
-    rna_dropout: float = 0.4            # rna-seq dropout
-    cnv_dropout: float = 0.2            # cnv dropout
-    meth_dropout: float = 0.2           # methy dropout
-    max_dist: int = 10                  # maximum distance between genes in the graph
-    attention_mode: str = "boosted"     # attention mode : "boosted" | "standard"
-    lr: float = 1e-4                    # learning rate start
-    min_lr: float = 1e-6                # learning rate end
-    weight_decay: float = 1e-4          # weight decay
-    max_epochs: int = 400               # maximum number of epochs
-    patience: int = 40                  # patience for early stopping
-    log_every: int = 1                  # log every n epochs
-    batch_size: int = 32                # batch size
-    seed: int = 42                      # random seed
-    top_k: int = 250                    # top k genes to select
-    string_threshold: int = 400         # confidence threshold for PPI
-    inner_val_frac: float = 0.20        # fraction of training data to use for validation
-    focal_gamma: float = 2.0            # gamma parameter for focal loss
+    d: int = 128
+    pe_dim: int = 32
+    pe_method: str = "rwpe"              # "rwpe" | "laplacian" 
+    mini_heads: int = 4
+    global_heads: int = 8
+    global_layers: int = 1
+    dropout: float = 0.2
+    rna_dropout: float = 0.4
+    cnv_dropout: float = 0.2
+    meth_dropout: float = 0.2
+    max_dist: int = 10
+    attention_bias_mode: str = "inside"
+    lr: float = 1e-4
+    min_lr: float = 1e-6
+    weight_decay: float = 1e-4
+    max_epochs: int = 400
+    patience: int = 40
+    log_every: int = 1
+    batch_size: int = 32
+    seed: int = 42
+    top_k: int = 250
+    string_threshold: int = 400
+    inner_val_frac: float = 0.20
+    focal_gamma: float = 2.0
     # ---- fold control ----
     n_repeats_used: int = 5             # 5 -> full 25 estimates; 1 -> single repeat (5 folds)
     max_folds: Optional[int] = None     # None -> all; 1 -> single fold 
+    exclude_classes: tuple = () 
     # ---- Phase-1 flags (default == current behavior; model untouched) ----
-    gene_id_embedding: bool = False     # enable gene ID embedding
-    attention_bias_mode: str = "dual_softmax"  # "dual_softmax" | "standard"
-    numerical_tokenizer: str = "mlp"            # "mlp" | "linear"
-    unimodal_dropout_fill: str = "zero"       # "zero" | "mean"
+    gene_id_embedding: bool = True
+    # ---- pre-trained gene embeddings ----
+    pretrained_gene_emb: str = ""     # "" = use learnable G_i; path to dir or prefix otherwise
+    pretrained_emb_adapter_rank: int = 32   # 0 = linear projection only; >0 = bottleneck adapter
+    pretrained_emb_cache: str = "/results/results"    # path to save/load the aligned .npy matrix
+    numerical_tokenizer: str = "mlp"
+    plr_n_frequencies: int = 16           # K frequencies per modality (PLR)
+    plr_sigma: float = 1.0                # Among values to try {0.1, 0.5, 1.0, 3.0}
+    unimodal_dropout_fill: str = "mask_token"   # "zero" -> 0 fill mod dropout | "mask_token" -> mask token fill
+    attention_lambda_gate: bool = False   # A = softmax(QK + λB)V
 
 
 # ---- torch-free helpers --------------------------------------------------
@@ -98,6 +107,35 @@ def select_folds(folds, n_repeats_used, max_folds):
         folds = folds[:max_folds]
     return folds
 
+def apply_class_exclusion(od, folds, exclude_classes):
+    """Drop patients whose label is in `exclude_classes`, remap each fold's indices
+    to the compacted patient array, and re-encode labels to contiguous 0..C-1.
+    The SAME patients stay in the SAME folds (minus the dropped ones), so toggling
+    exclude_classes is a clean A/B comparison. Graph/PE/SPD are unaffected (they
+    depend on selected genes, not patients), though per-fold MAD selection will
+    shift slightly because the training cohort changed -- which is correct."""
+    exclude = set(exclude_classes)
+    keep_mask = np.array([od.inverse_label_map[int(y)] not in exclude for y in od.y])
+    kept = np.where(keep_mask)[0]
+    remap = -np.ones(od.n_patients, dtype=int)
+    remap[kept] = np.arange(len(kept))
+    remaining = [od.inverse_label_map[i] for i in range(len(od.label_map))
+                 if od.inverse_label_map[i] not in exclude]
+    new_label_map = {c: j for j, c in enumerate(remaining)}
+    new_inv = {j: c for c, j in new_label_map.items()}
+    y_new = np.array([new_label_map[od.inverse_label_map[int(y)]] for y in od.y[kept]],
+                     dtype=np.int64)
+    new_od = OmicsData(
+        X=od.X[kept], y=y_new, patient_ids=[od.patient_ids[i] for i in kept],
+        gene_names=od.gene_names, label_map=new_label_map, inverse_label_map=new_inv)
+    new_folds = [type(f)(repeat=f.repeat, fold=f.fold,
+                         train_idx=remap[f.train_idx[keep_mask[f.train_idx]]],
+                         test_idx=remap[f.test_idx[keep_mask[f.test_idx]]])
+                 for f in folds]
+    print(f"[exclude] dropped {od.n_patients - len(kept)} patient(s) in "
+          f"{sorted(exclude)}; {len(kept)} remain, {len(new_label_map)} classes "
+          f"{list(new_label_map)}.")
+    return new_od, new_folds
 
 def _config_to_dict(config):
     if is_dataclass(config):
@@ -105,7 +143,7 @@ def _config_to_dict(config):
     return {k: v for k, v in vars(config).items() if not k.startswith("_")}
 
 
-# ---- merged trainer ------------------------------------------------------
+# ---- trainer ------------------------------------------------------
 class FoldTrainer:
     """Self-contained per-fold trainer. PE + SPD + criterion are built once per
     fold by the runner and passed in (they are fold-constants)."""
@@ -121,7 +159,14 @@ class FoldTrainer:
         self.graph_pe = graph_pe
         self.criterion = criterion
         self.min_lr = min_lr
-        self.optimizer = optim.AdamW(self.model.parameters(), lr=lr, weight_decay=weight_decay)
+
+        lambda_params = [p for n, p in model.named_parameters() if 'lambda_raw' in n]
+        other_params  = [p for n, p in model.named_parameters() if 'lambda_raw' not in n]
+        self.optimizer = optim.AdamW([
+            {"params": other_params,  "weight_decay": weight_decay},
+            {"params": lambda_params, "weight_decay": 0.0, "lr": lr * 10000}
+            ], lr=lr)
+        # self.optimizer = optim.AdamW(self.model.parameters(), lr=lr, weight_decay=weight_decay)
         self.best_val_f1 = 0.0
         self.history = {"train_loss": [], "val_loss": [], "val_f1": []}
 
@@ -140,7 +185,8 @@ class FoldTrainer:
             out = self.model(rna, cnv, methy, self.graph_pe, self.spd_matrix)
             loss = self.criterion(out["logits"], labels)
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+            torch.nn.utils.clip_grad_norm_(
+            [p for n, p in self.model.named_parameters()],max_norm=1.0)
             self.optimizer.step()
             total += loss.item()
             pbar.set_postfix({"loss": f"{loss.item():.4f}"})
@@ -191,7 +237,7 @@ class FoldTrainer:
             if improved or epoch % max(1, log_every) == 0 or wait >= patience:
                 flag = "  *new best*" if improved else ""
                 print(f"  -> train {tl:.4f} | val {vl:.4f} | val_F1 {vf:.4f} | "
-                      f"best {best_f1:.4f}@e{best_epoch}{flag}")
+                      f"best {best_f1:.4f} at epoch {best_epoch}{flag}")
             if wait >= patience:
                 print(f"  early-stop: no val_F1 gain for {patience} epochs.")
                 break
@@ -246,20 +292,16 @@ def run_mogformer_cv(config: MOGFormerConfig, data_dir: str, results_dir: str,
                      alias_file: str = "9606.protein.aliases.v12.0.txt",
                      curated_genes_file: str = None,
                      files: dict = None):
+    
+    seed_everything(config.seed)
 
     files = files or {"rna": "data_rna_seq_v2_rsem.csv", "cnv": "data_cnv.csv",
-                      "methy": "data_methylation450.csv", "clin": "data_clinical.csv"}
+                      "methy": "data_methylation_M.csv", "clin": "data_clinical.csv"}
     os.makedirs(results_dir, exist_ok=True)
     fig_dir = os.path.join(results_dir, "figures"); os.makedirs(fig_dir, exist_ok=True)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"[device] {device}")
 
-    # STEP 0 guard: refuse silently-inert flipped Phase-1 flags.
-    _CURRENT = {"gene_id_embedding": False, "attention_bias_mode": "dual_softmax",
-                "numerical_tokenizer": "mlp", "unimodal_dropout_fill": "zero"}
-    flipped = {k: getattr(config, k) for k, v in _CURRENT.items() if getattr(config, k) != v}
-    if flipped:
-        raise NotImplementedError(f"Phase-1 flag(s) flipped but not yet wired: {flipped}.")
 
     DS = _make_tensor_dataset()
     od = load_omics(data_dir, files["rna"], files["cnv"], files["methy"], files["clin"])
@@ -267,10 +309,13 @@ def run_mogformer_cv(config: MOGFormerConfig, data_dir: str, results_dir: str,
     folds, patient_order = load_folds(folds_path)
     assert_folds_match(patient_order, od.patient_ids)
     folds = select_folds(folds, config.n_repeats_used, config.max_folds)
+    if config.exclude_classes:
+        od, folds = apply_class_exclusion(od, folds, config.exclude_classes)
     print(f"[folds] using {len(folds)} estimate(s)")
     num_classes = len(od.label_map)
     class_names = [od.inverse_label_map[i] for i in range(num_classes)]
     labels_idx = list(range(num_classes))
+    uni_idx = {g: i for i, g in enumerate(od.gene_names)}
 
     cache = StringGraphCache(os.path.join(data_dir, ppi_file),
                              os.path.join(data_dir, alias_file),
@@ -278,7 +323,23 @@ def run_mogformer_cv(config: MOGFormerConfig, data_dir: str, results_dir: str,
                              confidence_threshold=config.string_threshold)
 
     records, histories, confusions = [], [], []
+
+    # Pre-trained gene embedding — loaded once, aligned to universe, passed per fold
+    gene_emb_tensor = None
+    if config.pretrained_gene_emb:
+        emb_matrix = load_archs4_embeddings(
+            symbollist_path=config.pretrained_gene_emb + "_symbollist.txt",
+            emb_path=config.pretrained_gene_emb + "_emb.csv",
+            universe_genes=od.gene_names,
+            cache_path= None,
+        )
+        gene_emb_tensor = torch.tensor(emb_matrix, dtype=torch.float32)
+        print(f"[archs4] embedding tensor: {gene_emb_tensor.shape}, "
+              f"adapter_rank={config.pretrained_emb_adapter_rank}")
+
     for f in folds:
+        fold_seed = config.seed + f.repeat * 100 + f.fold   # unique per fold, deterministic
+        seed_everything(fold_seed)
         tag = f"r{f.repeat}f{f.fold}"
         print(f"\n=== fold {tag} ===")
         prep = MultiOmicsTransformer(
@@ -287,6 +348,13 @@ def run_mogformer_cv(config: MOGFormerConfig, data_dir: str, results_dir: str,
         prep.fit(od.X[f.train_idx], od.y[f.train_idx])
         selected = prep.get_selected_gene_names()
         n_sel = len(selected)
+        gene_ids = [uni_idx[g] for g in selected]
+
+        # Slice pre-trained embedding to selected genes (fold-specific subset)
+        fold_gene_emb = None
+        if gene_emb_tensor is not None:
+            fold_gene_emb = gene_emb_tensor[gene_ids]   # (n_sel, d_e) — already aligned
+            
         Xtr = prep.transform(od.X[f.train_idx]); ytr = od.y[f.train_idx]
         Xte = prep.transform(od.X[f.test_idx]); yte = od.y[f.test_idx]
 
@@ -298,15 +366,20 @@ def run_mogformer_cv(config: MOGFormerConfig, data_dir: str, results_dir: str,
 
         inner_tr, inner_val = train_test_split(
             np.arange(len(ytr)), test_size=config.inner_val_frac,
-            stratify=ytr, random_state=config.seed)
+            stratify=ytr, random_state=fold_seed)
         cw = torch.tensor(sqrt_dampened_weights(ytr[inner_tr], num_classes), dtype=torch.float32)
         criterion = MultiClassFocalLoss(alpha=cw, gamma=config.focal_gamma, reduction="mean")
 
         rtr, ctr, mtr = split_modalities(Xtr[inner_tr], n_sel)
         rva, cva, mva = split_modalities(Xtr[inner_val], n_sel)
         rte, cte, mte = split_modalities(Xte, n_sel)
+
+        def _worker_init(worker_id):
+            np.random.seed(fold_seed + worker_id)
+
         tr_loader = DataLoader(DS(rtr, ctr, mtr, ytr[inner_tr]),
-                               batch_size=config.batch_size, shuffle=True, drop_last=True)
+                               batch_size=config.batch_size, shuffle=True, drop_last=True,
+                               worker_init_fn=_worker_init,generator=torch.Generator().manual_seed(fold_seed))
         va_loader = DataLoader(DS(rva, cva, mva, ytr[inner_val]),
                                batch_size=config.batch_size, shuffle=False)
         te_loader = DataLoader(DS(rte, cte, mte, yte),
@@ -318,16 +391,39 @@ def run_mogformer_cv(config: MOGFormerConfig, data_dir: str, results_dir: str,
             global_layers=config.global_layers, dropout=config.dropout,
             rna_dropout_prob=config.rna_dropout, meth_dropout_prob=config.meth_dropout,
             cnv_dropout_prob=config.cnv_dropout, max_dist=config.max_dist,
-            attention_mode=config.attention_mode)
+            attention_bias_mode=config.attention_bias_mode, 
+            gene_id_embedding=config.gene_id_embedding,       
+            n_universe=od.n_genes, gene_ids=gene_ids,
+            pretrained_gene_emb=fold_gene_emb,           # None -> use learnable G_i
+            pretrained_emb_adapter_rank=config.pretrained_emb_adapter_rank,
+            numerical_tokenizer=config.numerical_tokenizer,    
+            plr_n_frequencies=config.plr_n_frequencies,
+            plr_sigma=config.plr_sigma,
+            lambda_gate=config.attention_lambda_gate,
+            unimodal_dropout_fill=config.unimodal_dropout_fill,)
+        
         trainer = FoldTrainer(model, tr_loader, va_loader, device, spd, graph_pe,
                               criterion, config.lr, config.min_lr, config.weight_decay)
+
+        
         trainer.fit_early(config.max_epochs, config.patience, config.log_every)
+
 
         proba, ytrue = trainer.predict_proba(te_loader)
         pred = proba.argmax(1)
         m = compute_fold_metrics(ytrue, pred, proba, labels_idx, class_names)
         m.update({"model": "MOGFormer_BASELINE", "repeat": f.repeat, "fold": f.fold,
                   "n_selected": n_sel, "best_inner_f1": trainer.best_val_f1})
+        
+        if config.attention_lambda_gate and config.attention_bias_mode == "inside":
+            import torch.nn.functional as F_
+            lambda_vals = {f"L{i}": [round(v, 4) for v in
+                            F_.softplus(layer.attn.lambda_raw).detach().cpu().tolist()]
+                            for i, layer in enumerate(trainer.model.global_transformer.layers)
+                            }
+            m["lambda_heads"] = str(lambda_vals)
+            print(f"  λ per head: {lambda_vals}")
+            
         records.append(m)
         histories.append({k: list(v) for k, v in trainer.history.items()})
         confusions.append(fold_confusion(ytrue, pred, labels_idx))
@@ -362,7 +458,7 @@ def _write_baseline_artifacts(config, records, class_names, results_dir, fig_dir
             if f"f1__{c}" in wide:
                 fh.write(f"  - {c}: {wide[f'f1__{c}'].mean():.4f}\n")
     plot_c00(agg["mean"], (agg["ci95_lo"], agg["ci95_hi"]), fig_dir)
-    fold_plots.save_monitoring_figures(wide, histories or [], confusions or [],
+    save_monitoring_figures(wide, histories or [], confusions or [],
                                        class_names, fig_dir)
     print(f"\nBASELINE macro-F1 = {agg['mean']:.4f} "
           f"[{agg['ci95_lo']:.4f}, {agg['ci95_hi']:.4f}]  (target 0.852, ref 0.738)")

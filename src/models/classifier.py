@@ -25,7 +25,17 @@ class MultiOmicsGraphClassifier(nn.Module):
                  meth_dropout_prob: float = 0.15,
                  cnv_dropout_prob: float = 0.15,
                  max_dist: int = 5,
-                 attention_mode: str = "boosted"):
+                 attention_bias_mode: str = "dual",
+                 gene_id_embedding: bool = False,
+                 n_universe: int = 0,
+                 gene_ids=None,
+                 pretrained_gene_emb=None,
+                 pretrained_emb_adapter_rank=0,
+                 numerical_tokenizer: str = "mlp",   
+                 plr_n_frequencies: int = 16,
+                 plr_sigma: float = 1.0,
+                 lambda_gate: bool = False,
+                 unimodal_dropout_fill: str = "zero"):
         """
         Args:
             num_classes: Number of clinical subtypes (e.g., 5 for BRCA)
@@ -38,7 +48,14 @@ class MultiOmicsGraphClassifier(nn.Module):
         self.num_classes = num_classes
         
         # 1. Modality Lifting
-        self.lifter = ModalityLifting(d=d)
+        self.lifter = ModalityLifting(d=d, gene_id_embedding=gene_id_embedding,
+                                      n_universe=n_universe, gene_ids=gene_ids,
+                                      pretrained_gene_emb=pretrained_gene_emb,
+                                      pretrained_emb_adapter_rank=pretrained_emb_adapter_rank,
+                                      numerical_tokenizer=numerical_tokenizer,
+                                      plr_n_frequencies=plr_n_frequencies,
+                                      plr_sigma=plr_sigma,
+                                      unimodal_dropout_fill=unimodal_dropout_fill)
         
         # 2. Intra-Gene Fusion (Mini-Transformer)
         self.mini_transformer = MiniTransformer(
@@ -57,8 +74,9 @@ class MultiOmicsGraphClassifier(nn.Module):
             num_heads=global_heads, 
             num_layers=global_layers,
             max_dist=max_dist,
-            attention_mode=attention_mode,
-            dropout=dropout
+            attention_bias_mode=attention_bias_mode,
+            dropout=dropout,
+            lambda_gate=lambda_gate
         )
         
         # 4. Classification Head (MLP)

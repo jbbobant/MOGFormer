@@ -7,7 +7,9 @@ class MiniTransformer(nn.Module):
     Intra-Gene Attention mechanism. Fuses mRNA, CNV, and Methylation data 
     into a single unified gene representation via self-attention.
     """
-    def __init__(self, d: int = 64, num_heads: int = 4, dropout: float = 0.1, rna_dropout_prob: float = 0.3, cnv_dropout_prob: float = 0.15, meth_dropout_prob: float = 0.15):
+    def __init__(self, d: int = 64, num_heads: int = 4, dropout: float = 0.1, 
+                 rna_dropout_prob: float = 0.3, cnv_dropout_prob: float = 0.15, 
+                 meth_dropout_prob: float = 0.15, unimodal_dropout_fill: str = "zero"):
         """
         Args:
             d: Token dimension (default 64)
@@ -40,6 +42,18 @@ class MiniTransformer(nn.Module):
             nn.Linear(d * 2, d)
         )
 
+        #Learnt mask embedding for each modality
+        self.unimodal_dropout_fill = unimodal_dropout_fill
+        if unimodal_dropout_fill == "mask_token":
+            self.mask_rna   = nn.Parameter(torch.zeros(1, 1, d))
+            self.mask_cnv   = nn.Parameter(torch.zeros(1, 1, d))
+            self.mask_methy = nn.Parameter(torch.zeros(1, 1, d))
+            nn.init.normal_(self.mask_rna,   std=0.02)
+            nn.init.normal_(self.mask_cnv,   std=0.02)
+            nn.init.normal_(self.mask_methy, std=0.02)
+
+    
+
     def forward(self, z_m: torch.Tensor, z_c: torch.Tensor, z_t: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Args:
@@ -53,39 +67,29 @@ class MiniTransformer(nn.Module):
         
         # -- REGULARIZATION: Exclusive Modality Dropout (Max 1 Drop) --
         if self.training:
-            # 1. Roll a single die for each gene in the batch
-            # Shape: (Batch, N_genes, 1)
             rand_vals = torch.rand(B, N, 1, device=z_m.device)
+            t_rna   = self.rna_dropout_prob
+            t_cnv   = t_rna  + self.cnv_dropout_prob
+            t_methy = t_cnv  + self.meth_dropout_prob
             
-            # 2. Define the cumulative probability thresholds
-            t_rna = self.rna_dropout_prob
-            t_cnv = t_rna + self.cnv_dropout_prob
-            t_methy = t_cnv + self.meth_dropout_prob
-            
-            # Sanity check (can be removed in production)
             if t_methy > 1.0:
                 raise ValueError("Sum of dropout probabilities exceeds 1.0!")
 
-            # 3. Initialize all masks to 1.0 (Keep everything)
-            mask_rna = torch.ones(B, N, 1, device=z_m.device)
-            mask_cnv = torch.ones(B, N, 1, device=z_c.device)
-            mask_methy = torch.ones(B, N, 1, device=z_t.device)
+            # Boolean masks: True where the modality is DROPPED for that (batch, gene)
+            drop_rna   = rand_vals < t_rna
+            drop_cnv   = (rand_vals >= t_rna)  & (rand_vals < t_cnv)
+            drop_methy = (rand_vals >= t_cnv)  & (rand_vals < t_methy)
 
-            # 4. Apply exclusive drops using the partitioned thresholds
-            mask_rna = mask_rna.masked_fill(rand_vals < t_rna, 0.0)
-            
-            mask_cnv = mask_cnv.masked_fill(
-                (rand_vals >= t_rna) & (rand_vals < t_cnv), 0.0
-            )
-            
-            mask_methy = mask_methy.masked_fill(
-                (rand_vals >= t_cnv) & (rand_vals < t_methy), 0.0
-            )
-
-            # 5. Apply the safe, exclusive masks to the tensors
-            z_m = z_m * mask_rna
-            z_c = z_c * mask_cnv
-            z_t = z_t * mask_methy
+            if self.unimodal_dropout_fill == "mask_token":
+                # Broadcast mask tokens to (B, N, d); substitute where dropped
+                z_m = torch.where(drop_rna.expand_as(z_m),self.mask_rna.expand_as(z_m),   z_m)
+                z_c = torch.where(drop_cnv.expand_as(z_c),self.mask_cnv.expand_as(z_c),   z_c)
+                z_t = torch.where(drop_methy.expand_as(z_t),self.mask_methy.expand_as(z_t), z_t)
+                
+            else:  # "zero" — original behaviour
+                z_m = z_m.masked_fill(drop_rna,   0.0)
+                z_c = z_c.masked_fill(drop_cnv,   0.0)
+                z_t = z_t.masked_fill(drop_methy, 0.0)
 
             
         # -- SEQUENCE FORMULATION --

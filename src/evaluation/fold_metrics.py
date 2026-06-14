@@ -116,3 +116,4 @@ def aggregate(
         for k in ("ci95_lo", "ci95_hi", "nb_ci95_lo", "nb_ci95_hi"):
             res[k] = np.nan
     return res
+    
