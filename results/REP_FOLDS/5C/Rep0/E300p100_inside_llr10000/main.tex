@@ -1,0 +1,515 @@
+\documentclass[10pt, twocolumn]{article}
+
+% --- Essential Packages ---
+\usepackage[margin=1.5cm]{geometry} % Narrow margins typical of journals
+\usepackage{graphicx}               % For figures
+\usepackage{authblk}                % For author affiliations
+\usepackage{caption}                % To format figure captions
+\usepackage{amsmath, amssymb, amsfonts} % For math environments
+\usepackage{titlesec}               % To format section headings
+\usepackage{booktabs}               % For tables
+\usepackage{xcolor}                 % For custom colors
+\usepackage{tikz}                   % For organic shape rendering
+
+% --- Font and Aesthetic Tweaks ---
+\usepackage{mathptmx}               % Times-like font
+\usepackage[T1]{fontenc}
+
+% --- Custom Palette ---
+\definecolor{MainBlue}{HTML}{2B5B84}
+\definecolor{MainGrey}{HTML}{555555}
+\definecolor{SmallPink}{HTML}{EFD2E8}
+\definecolor{DarkBG}{HTML}{222222}
+
+\usepackage[colorlinks=true, linkcolor=MainBlue, citecolor=MainBlue, urlcolor=MainBlue]{hyperref}
+
+% --- Formatting Section Headings ---
+\titleformat{\section}{\large\bfseries\color{MainBlue}}{\thesection.}{0.5em}{}
+\titleformat{\subsection}{\normalsize\bfseries\color{MainGrey}}{\thesubsection.}{0.5em}{}
+\titleformat{\subsubsection}{\normalsize\itshape\color{MainGrey}}{\thesubsubsection.}{0.5em}{}
+
+% --- Formatting the Abstract ---
+\renewenvironment{abstract}
+ {\small\bfseries}
+ {\par\vspace{1em}}
+
+% --- Helpers (DRAFT only: remove before submission) ---
+% High-contrast TODOs with specific small text coloring on a dark background
+\newcommand{\todo}[1]{\textcolor{red}{[\textbf{TODO}: #1]}}
+
+% Compilable figure placeholder with a simpler, pure, and slightly organic shape
+\newcommand{\figplaceholder}[1]{%
+  \begin{center}
+  \begin{tikzpicture}
+    \draw[MainGrey, thick, rounded corners=8pt] (0,0) rectangle (0.92\linewidth, 3.0cm);
+    \node[MainGrey, font=\small\itshape, text width=0.85\linewidth, align=center] at (0.46\linewidth, 1.5cm) {#1};
+  \end{tikzpicture}
+  \end{center}
+}
+
+% --- Title and Author Information ---
+\title{\vspace{-1.5cm} \textbf{MOGFormer: A Patient-Specific Multi-Omics Graph Transformer with Hierarchical Pathway Encodings for Interpretable Cancer Subtyping}}
+
+\author[1]{BOBANT Jean-Baptiste\thanks{Corresponding author: bobantjeanbaptiste@gmail.com}}
+
+\affil[1]{\small CentraleSupélec, Paris-Saclay University, France}
+\date{}
+
+\begin{document}
+
+\maketitle
+
+% =====================================================================
+% ABSTRACT
+% =====================================================================
+\section*{Abstract}
+Accurate stratification of cancer subtypes is essential for personalized
+therapy, yet deep models struggle in the $N \ll p$ regime characteristic of
+multi-omics cohorts, where well-tuned classical early-fusion models remain
+formidable baselines. Multi-modal fusion methods also suffer from information
+routing biases, lazily relying on high-density transcriptomics while ignoring
+epigenetic and copy-number signals, and standard graph neural networks fail to
+respect established biological topographies. We present MOGFormer, a
+patient-specific multi-omics graph transformer that builds unified gene-level
+tokens from raw multimodal continuous signals through non-linear feature
+tokenizers and localized intra-gene cross-attention, and structures its global
+attention with a soft inductive bias derived from Protein--Protein Interaction
+(PPI) shortest-path distances, read out through specialized Latent Pathway
+Tokens. We evaluate MOGFormer on $949$ TCGA-BRCA patients (RNA-seq, copy-number variation,
+methylation) for PAM50 subtyping under a deliberately rigorous, leakage-free
+protocol: repeated stratified patient-level cross-validation with all feature
+selection, normalization, and graph construction refit inside each fold, and
+paired comparison against a full classical baseline suite. Beyond predictive
+performance, MOGFormer offers native, multi-tiered interpretability, mapping
+global patient states back to single-gene multimodal driver mechanisms without
+post-hoc explainers.
+
+% =====================================================================
+% INTRODUCTION
+% =====================================================================
+\section*{Introduction}
+
+In the era of precision oncology, leveraging machine learning for \textit{in
+silico} biological discovery requires architectures that simultaneously navigate
+vast feature spaces and yield mechanistic insight. Traditional early-fusion
+models often match or outperform deep networks on multi-omics cohorts because of
+the acute $N \ll p$ regime, where the absence of structural constraints lets
+flexible models overfit~\cite{gorishniy2022,wang2021mogonet}. To embed biological
+reality into deep models, Graph Neural Networks (GNNs) have been used with Gene
+Regulatory Networks or PPI networks as structural priors. However, message-passing
+GNNs suffer from two architectural flaws: the over-squashing of information during
+localized aggregation, and an inability to discover \textit{de novo} or
+context-specific interactions beyond the static edges of the input graph.
+
+To transcend these limitations, we extend the transformer architecture to
+biological graphs through \texttt{MOGFormer}. Following the Graphormer
+paradigm~\cite{ying2021graphormer}, global self-attention parametrized by a soft
+structural bias prevents information bottlenecks while letting the network learn
+long-range genetic dependencies absent from static databases.
+
+Crucially, cellular state is not driven by transcriptomics alone; it is governed
+by a multi-tiered epigenetic and structural landscape. \texttt{MOGFormer}
+captures three primary modalities:
+\begin{itemize}
+    \item \textbf{RNA-sequencing (mRNA):} the high-density downstream
+    transcriptional output and functional state of the cell.
+    \item \textbf{Copy Number Variations (CNV):} discrete structural alterations
+    (focal amplifications, deletions) that set baseline expression boundaries.
+    \item \textbf{Methylation $\beta$-values:} localized CpG-island modifications
+    that dynamically silence or activate transcription.
+\end{itemize}
+
+\subsection*{Intra-Gene Interactions: Epigenetic \& transcriptomic}
+Cellular identity is not dictated by a flat vector of independent genomic features, but by a hierarchical regulatory cascade occurring within each individual gene. While transcriptomics provides a high-density snapshot of the cellular functional state, it is bounded by structural alterations (CNV) and dynamically regulated by epigenetic modifications (methylation). Conventional early-fusion models simply concatenate these signals, implicitly treating a gene's promoter methylation as independent of its own transcriptional output. However, biological reality dictates localized cross-talk—for instance, hypermethylation directly silences mRNA expression. To faithfully capture this regulatory grammar, an architecture must explicitly resolve these intra-gene dependencies before evaluating the global cellular state. This localized biological constraint directly motivates our intra-gene cross-attention mechanism, which learns a unified, mechanistically coherent token for each gene.
+
+\subsection*{Inter-Gene Interactions: Navigating Pathway Topographies}
+Beyond localized regulation, oncogenic phenotypes are driven by systemic dysregulations across complex biochemical networks. Genes and their downstream protein products do not operate in a vacuum; they interact through structured signaling cascades and physical complexes. While static Protein-Protein Interaction (PPI) networks map these potential topological connections, standard message-passing GNNs applied to these structures suffer from information over-squashing and fail to capture context-specific, long-range dependencies that emerge \textit{de novo} in tumor states. Conversely, naive multi-omics transformers ignore established biological topology entirely, leading to spurious correlations in the $N \ll p$ regime. This necessitates a hybrid approach: a structurally biased global attention mechanism where established PPI shortest-path distances act as a soft inductive prior. This allows the network to route information along known canonical pathways while retaining the flexibility of global self-attention to discover novel inter-gene dependencies.
+
+
+Rather than treating each of the three modalities as disjoint vectors, our architecture explicitly models
+their intra-gene cross-talk (e.g.\ methylation-driven silencing of expression)
+prior to global state computation.
+
+We validate this framework on the The Cancer Genome Atlas Breast Invasive
+Carcinoma (TCGA-BRCA) cohort~\cite{tcga2012brca}. Breast cancer is highly
+heterogeneous, conventionally classified via the PAM50
+panel~\cite{parker2009pam50} into Basal-like, HER2-enriched, Luminal A, Luminal B,
+and Normal-like subtypes, which carry distinct prognosis and therapeutic
+implications. While robust classification matters, the core contribution of
+\texttt{MOGFormer} lies in its native, multi-tiered interpretability: bypassing
+post-hoc explainers (LRP, SHAP), the routing mechanics expose which global
+pathways drove a classification, which driver genes anchored those pathways, and
+which omics modality dictated an anomalous gene state.
+
+% =====================================================================
+% DATA
+% =====================================================================
+\section{Dataset and Preprocessing}
+
+\subsection{Dataset}
+We use TCGA-BRCA, retaining female patients with matched RNA-seq, copy-number, and
+methylation $\beta$-value profiles for the genes of interest, yielding $949$
+patients. The PAM50 label distribution is markedly imbalanced: 166 Basal, 77 HER2,
+480 Luminal A, 194 Luminal B, and 35 Normal-like (Fig.~\ref{fig:classdist}). This
+imbalance, in particular the 35 Normal-like cases, governs both the
+evaluation design (Sec.~\ref{sec:eval}) and the dominant error modes
+(Sec.~\ref{sec:results}).
+
+\begin{figure}[t]
+    \centering
+    % \includegraphics[width=0.95\linewidth]{figures/V01_class_distribution.pdf}
+    \figplaceholder{Figure 1 placeholder --- PAM50 class distribution (the imbalance), 166/77/480/194/35.}
+    \caption{PAM50 subtype distribution across the 949-patient TCGA-BRCA cohort.}
+    \label{fig:classdist}
+\end{figure}
+
+\subsection{Leakage-Free, Per-Fold Preprocessing}
+Preventing data leakage is critical and is enforced \emph{within} every
+cross-validation fold rather than once globally. Let the raw inputs be
+$\mathbf{X}_{mRNA}$, $\mathbf{X}_{CNV}$, $\mathbf{X}_{methy}$ and the clinical
+vector $\mathbf{Y}$. Only patients present across all three modalities and the
+clinical table are retained, deduplicated at the patient level. Every statistical
+operation below is fit on the training fold alone and merely applied to held-out
+patients.
+
+\vspace{0.2cm}\noindent\textbf{Highly Variable Gene (HVG) Selection.}
+To extract informative genes while remaining robust to outliers, we rank by the
+Median Absolute Deviation (MAD),
+\begin{equation}
+    \text{MAD}(\mathbf{x}) = \text{median}(|\mathbf{x} - \text{median}(\mathbf{x})|),
+\end{equation}
+computed per modality, and combine modalities through a consensus rank
+\begin{equation}
+    \text{Rank}_{cons} = \text{Rank}_{mRNA} + \text{Rank}_{CNV} + \text{Rank}_{methy}.
+\end{equation}
+The top $N$ genes by consensus rank are kept. A curated set of PAM50/Prosigna and
+known BRCA driver genes is \emph{force-included} after ranking, guaranteeing that
+canonical markers (e.g.\ \textit{ESR1}, \textit{ERBB2}, \textit{MKI67}) are present
+in every fold regardless of their MAD rank. Unless otherwise stated we use
+$N = 250$ MAD genes augmented by the curated set.
+
+\vspace{0.2cm}\noindent\textbf{Modality-Specific Normalization.}
+Normalization parameters are fit on the training split only. For RNA-seq we apply
+$\mathbf{x}_{mRNA}' = \text{StandardScale}(\ln(\mathbf{x}_{mRNA} + 1))$; for CNV
+and methylation, $\mathbf{x}' = \text{StandardScale}(\mathbf{x})$. Median
+imputation, where required, is likewise fit on the training fold.
+
+% =====================================================================
+% ARCHITECTURE
+% =====================================================================
+\section{Architectural Formulation}
+
+\subsection{Non-Linear Modality Lifting}
+Genomic and epigenomic variations do not scale linearly; biological mechanisms
+operate on physiological thresholds. For each patient and selected gene
+$i \in \{1,\dots,N\}$, scalar values are projected into a $d$-dimensional space
+($d=128$) by per-modality Feature Tokenizers (small MLPs), with learnable modality
+embeddings $\mathbf{E}_m, \mathbf{E}_c, \mathbf{E}_t \in \mathbb{R}^d$ encoding
+biological origin:
+\begin{align}
+    \mathbf{z}_{m,i} &= \text{MLP}_{mRNA}(x_{m,i}) + \mathbf{E}_{m} \\
+    \mathbf{z}_{c,i} &= \text{MLP}_{CNV}(x_{c,i}) + \mathbf{E}_{c} \\
+    \mathbf{z}_{t,i} &= \text{MLP}_{methy}(x_{t,i}) + \mathbf{E}_{t}
+\end{align}
+Each MLP is \texttt{Linear} $\to$ \texttt{LayerNorm} $\to$ \texttt{GELU} $\to$
+\texttt{Linear}.
+
+\subsection{Intra-Gene Fusion and Symmetrical Masking}
+To model local epigenetic--transcriptomic interactions (e.g.\ methylation
+silencing of mRNA), we apply local cross-attention inside each gene. The input
+sequence for gene $i$ prepends a learnable token $\mathbf{z}_{cls}$:
+\begin{equation}
+    \mathbf{X}_i = \begin{bmatrix} \mathbf{z}_{cls} \\ \mathbf{z}_{m,i} \\
+    \mathbf{z}_{c,i} \\ \mathbf{z}_{t,i} \end{bmatrix} \in \mathbb{R}^{4 \times d}.
+\end{equation}
+
+\vspace{0.15cm}\noindent\textbf{Unimodal Dropout.}
+Masking a single modality enforces cross-modal redundancy. With probability
+$p_{drop}$ at most one channel is masked:
+\begin{equation}
+    \tilde{\mathbf{z}}_{k,i} = \begin{cases}
+      \text{0 now then }\mathbf{z}_{mask}^{(k)}, & \text{prob. } p_{drop} \\
+      \mathbf{z}_{k,i}, & \text{otherwise}
+   \end{cases} \quad \forall k \in \{m, c, t\},
+\end{equation}
+where $\mathbf{z}_{mask}^{(k)} \in \mathbb{R}^d$ is a learnable per-modality mask
+token; capping at one masked channel lets the model impute the missing modality
+from the remaining two. Because RNA-seq is the most information-dense modality and
+tends to dominate, a higher dropout rate is applied to it specifically to prevent
+the model from collapsing onto transcriptomics. \todo{Change 0 to
+ $\mathbf{z}_{mask}^{(k)}$ when the masking token will be implemented and tested}
+
+\vspace{0.15cm}\noindent\textbf{Intra-Gene Attention.}
+Multi-head self-attention with a Pre-LayerNorm formulation,
+\begin{equation}
+    \mathbf{X}_i' = \mathbf{X}_i + \text{MHA}(\text{LN}(\mathbf{X}_i)),
+\end{equation}
+produces the unified gene representation $\mathbf{h}_i = \mathbf{X}_{i,0}'' \in
+\mathbb{R}^d$ from the updated classification token.
+
+\subsection{Graph Positional Encoding}
+Beyond the attention bias below, each gene token is endowed with a graph-structural
+positional encoding computed from the induced PPI subgraph of the selected genes.
+We use Random-Walk Positional Encodings (RWPE)~\cite{dwivedi2022rwpe}: with
+$\mathbf{A}$ the (binary, symmetric) adjacency and $\mathbf{P}=\mathbf{D}^{-1}
+\mathbf{A}$ the random-walk transition matrix, the $k$-step return probabilities
+\begin{equation}
+    \mathbf{p}_i = \big[\, [\mathbf{P}^1]_{ii},\, [\mathbf{P}^2]_{ii},\, \dots,\,
+    [\mathbf{P}^{d_{pe}}]_{ii} \,\big] \in \mathbb{R}^{d_{pe}}
+\end{equation}
+encode each gene's local topological role. The encoding is exposed as a modular
+component (RWPE or Laplacian eigenvectors) so the positional scheme can itself be
+tuned. 
+
+\subsection{Global Transformer and Biased Attention}
+\label{sec:globalattn}
+To respect canonical pathways, we bias the global attention matrix with the
+Shortest Path Distance (SPD) of the PPI network. Each head $h$ maps integer
+distances to a learnable bias, bounded by $\tanh$ to preserve gradient stability:
+\begin{equation}
+    \mathbf{B}_{spatial}^{(h)} = \tanh\!\left(\text{Embed}^{(h)}(\mathbf{D}_{SPD})\right).
+\end{equation}
+A \texttt{[TUMOR\_CLS]} token aggregates information across all genes,
+$\mathbf{H}^{(0)} = [\mathbf{t}_{cls}, \mathbf{h}_1, \dots, \mathbf{h}_N]$. In the
+current model the structural bias is injected through separate row-wise softmax
+terms (a dual-softmax formulation),
+\begin{equation}
+    \text{Attn}^{(h)} = \text{softmax}\!\left(\tfrac{\mathbf{Q}\mathbf{K}^\top}
+    {\sqrt{d_k}}\right)\mathbf{V} + \text{softmax}\!\left(\mathbf{B}_{spatial}^{(h)}
+    \right)\mathbf{V},
+\end{equation}
+following the row-wise scaling of Graphormer-Boosted~\cite{fadlallah2025}. A
+canonical Graphormer formulation that places the bias \emph{inside} a single
+softmax is a planned refinement (Sec.~\ref{sec:future}).
+
+\subsection{Classification and Dampened Focal Loss}
+The $K=8$ pathway tokens of the final layer are aggregated into a systemic tumor
+state $\mathbf{u}_{tumor} = \text{MLP}_{agg}([\mathbf{t}_{p_1}^{(L)}, \dots,
+\mathbf{t}_{p_K}^{(L)}]) \in \mathbb{R}^d$, and subtype logits are produced by a
+bottleneck head ($d \to d/2$):
+\begin{equation}
+    \hat{\mathbf{y}} = \mathbf{W}_2\,\text{GELU}\!\left(\text{BatchNorm}
+    (\mathbf{W}_1 \mathbf{u}_{tumor} + \mathbf{b}_1)\right).
+\end{equation}
+Optimization uses a Multi-Class Focal Loss~\cite{lin2017focal} with
+$\gamma=2.0$, with square-root-dampened inverse class frequencies
+$\alpha_c = \sqrt{1/N_c}$ to counter the extreme Normal-like imbalance without
+inducing degenerate ``safe-guess'' behavior.
+
+% =====================================================================
+% INTERPRETABILITY
+% =====================================================================
+\section{Native Interpretability}
+The architecture supports interpretation without external attribution methods:
+\begin{itemize}
+    \item \textbf{Global driver extraction:} the final-layer attention from the
+    pathway tokens identifies the genes most heavily attended.
+    \item \textbf{Deep drill-down:} for each driver gene, its $4\times4$
+    intra-gene attention matrix isolates which omics modality drove the anomalous
+    token state.
+\end{itemize}
+
+% =====================================================================
+% EVALUATION METHODOLOGY
+% =====================================================================
+\section{Evaluation Methodology}
+\label{sec:eval}
+Because classical early-fusion models are strong in the $N \ll p$ regime, any claim
+of deep-model benefit must survive a rigorous, identical protocol applied to all
+methods. We therefore evaluate every model --- baselines and MOGFormer --- through
+a single shared harness.
+
+\vspace{0.15cm}\noindent\textbf{Cross-validation.}
+We use repeated stratified $k$-fold cross-validation at the patient level: $5$
+folds repeated $5$ times for $25$ estimates, stratified on PAM50 label. Five folds
+(rather than ten) keep $\sim$7 Normal-like patients per held-out fold. Fold
+indices are persisted so every model is scored on identical partitions, enabling
+\emph{paired} statistical tests.
+
+\vspace{0.15cm}\noindent\textbf{Leakage controls.}
+Within each outer fold, HVG selection, imputation, normalization, \emph{and} the
+induced PPI subgraph (hence the RWPE and SPD matrices) are recomputed on the
+training patients only; no held-out patient influences any fitted statistic or the
+graph. Hyperparameter tuning and early stopping use an inner stratified $20\%$
+split of the training fold; the outer fold is never seen during model selection.
+
+\vspace{0.15cm}\noindent\textbf{Statistics.}
+We report macro-F1 as the primary metric (mean $\pm$ 95\% CI over the 25
+estimates), together with per-class F1, balanced accuracy, Matthews correlation,
+and per-class ROC/PR-AUC. Because cross-validation folds overlap, we additionally
+report the Nadeau--Bengio corrected-resampled variance~\cite{nadeau2003} and, for
+model-versus-model claims, the paired Wilcoxon signed-rank test on the 25 paired
+per-fold scores, summarized through critical-difference diagrams~\cite{demsar2006}.
+
+\vspace{0.15cm}\noindent\textbf{Baseline suite.}
+All baselines run through the identical pipeline and folds: a stratified
+\textit{Dummy} floor; a PAM50 nearest-centroid classifier on RNA (the
+label-source reference~\cite{parker2009pam50}); penalized multinomial logistic
+regression; a linear SVM; random forests; gradient-boosted trees (XGBoost); and
+TabPFN-v2~\cite{hollmann2023tabpfn} on the top-$K$ genes. Each classical model is
+evaluated under both early fusion (concatenated standardized features) and late
+fusion (per-modality models with averaged class probabilities), and MOGONET is
+retained as a direct GNN comparator~\cite{wang2021mogonet}.
+
+% =====================================================================
+% RESULTS
+% =====================================================================
+\section{Results}
+\label{sec:results}
+% NOTE: baseline numbers below are the current Phase-0 results; please confirm
+% they are final before submission. The MOGFormer cross-validated result is still
+% being computed and is intentionally left as "under evaluation".
+
+\begin{table}[t]
+    \centering
+    \small
+    \caption{PAM50 subtyping under the shared 25-estimate protocol (early fusion,
+    all three modalities). Baseline figures are current Phase-0 results;
+    MOGFormer is under evaluation through the identical harness.}
+    \label{tab:baselines}
+    \begin{tabular}{lc}
+        \toprule
+        Model & Macro-F1 \\
+        \midrule
+        Dummy (stratified) & \todo{floor} \\
+        PAM50 nearest-centroid (RNA) & 0.738 \\
+        Gradient-boosted trees (XGBoost) & \textbf{0.852} \\
+        \midrule
+        MOGFormer (ours) & \textit{under evaluation} \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\noindent\textbf{Classical early-fusion is a demanding baseline.} A well-tuned
+XGBoost reaches a macro-F1 of $0.852$, well above the PAM50 nearest-centroid
+reference ($0.738$); since PAM50 labels are themselves RNA-derived, the centroid
+classifier is the most conceptually important reference point
+(Table~\ref{tab:baselines}). This sets a stringent target for any deep model.
+
+\vspace{0.15cm}\noindent\textbf{Multi-omics versus single-omics.} Across the
+modality-contribution grid, RNA-only performance ($\sim$0.86 macro-F1) is
+statistically indistinguishable from the full three-modality configuration, with
+CNV and methylation adding little \emph{accuracy} over RNA alone
+(Fig.~\ref{fig:results}). This motivates MOGFormer's design emphasis on
+\emph{interpretable} cross-modal routing rather than accuracy gains from fusion
+per se, and frames cross-modal contribution as a question best answered by
+attention attribution rather than by held-out F1.
+
+\vspace{0.15cm}\noindent\textbf{Which classes drive the error.} Per-class F1 for
+the best classical model is high for Basal ($0.98$), Luminal A ($0.94$), HER2
+($0.89$), and Luminal B ($0.88$), but collapses for Normal-like ($0.51$). The
+dominant confusions are Luminal A $\leftrightarrow$ Luminal B and Normal-like
+$\to$ Luminal A. Normal-like ($n=35$) is therefore the universal bottleneck, and
+we report per-class F1 at every step to prevent the macro average from masking
+this collapse.
+
+\vspace{0.15cm}\noindent\textbf{Feature-count sensitivity.} Performance is stable
+for $N \in [100, 500]$ selected genes, defining the operating regime; we fix
+$N=250$ to balance this plateau against the $O(N^2)$ cost of global attention.
+
+\begin{figure}[t]
+    \centering
+    % \includegraphics[width=0.95\linewidth]{figures/C00_baseline_vs_references.pdf}
+    \figplaceholder{Figure 2 placeholder --- MOGFormer macro-F1 ($\pm$95\% CI)
+    against reference lines (XGBoost 0.852, PAM50-centroid 0.738), plus the
+    per-class F1 panel emphasizing Normal-like.}
+    \caption{MOGFormer versus reference models under the shared protocol, with
+    per-class breakdown. \todo{Insert C00/F01 once the 25-estimate MOGFormer run
+    completes.}}
+    \label{fig:results}
+\end{figure}
+
+% =====================================================================
+% FUTURE WORK
+% =====================================================================
+\section{Ongoing Refinements and Future Work}
+\label{sec:future}
+
+\subsection{Targeted Architectural Refinements}
+Guided by the gap to the classical baseline, four single-variable refinements are
+under controlled evaluation, each applied and measured in isolation through the
+shared harness: (i) a per-gene identity embedding $\mathbf{G}_i$ added to every
+modality token, so the value path can distinguish genes of equal scaled magnitude;
+(ii) a canonical Graphormer attention that places the structural bias inside a
+single softmax rather than the dual-softmax of Sec.~\ref{sec:globalattn}; (iii)
+periodic (PLR) numerical embeddings~\cite{gorishniy2022} replacing the per-modality
+MLP tokenizers; and (iv) the learnable per-modality mask token for unimodal
+dropout. \todo{Report deltas once each single-change run completes; these are
+hypotheses, not yet results.}
+
+\subsection{Self-Supervised Pan-Cancer Pre-Training}
+To mitigate the $N \ll p$ constraint, we plan a self-supervised pre-training stage
+on unlabeled pan-cancer TCGA cohorts, building an oncogenic foundation
+representation before downstream adaptation. A random $15\%$ subset $\mathcal{M}$
+of genes has its three modalities replaced by a learnable mask token,
+$\mathbf{h}_i^{(0)} = \mathbf{z}_{mask}\ \forall i \in \mathcal{M}$; the masked
+sequence is propagated through the structurally biased layers and a regression head
+reconstructs the original normalized values, optimized by a masked MSE,
+\begin{equation}
+    \mathcal{L}_{MGM} = \frac{1}{|\mathcal{M}|} \sum_{i \in \mathcal{M}}
+    \sum_{k \in \{m,c,t\}} \left( x_{k,i} - \hat{x}_{k,i} \right)^2.
+\end{equation}
+After convergence, the reconstruction head is discarded, the tokenizers,
+intra-gene mini-transformers, and lower global layers are frozen, and the pathway
+tokens plus top classification layers are fine-tuned with the dampened focal loss
+--- reducing the sample complexity required on rare subtypes. \todo{This section
+describes planned work; mark clearly as such or omit for a results-focused
+submission.}
+
+% =====================================================================
+% METHODS
+% =====================================================================
+\section*{Methods}
+
+\subsection*{Graph Construction and Spatial Bias Embedding}
+The biological prior is the Human PPI network from STRING~\cite{szklarczyk2023string}.
+Let $G=(V,E)$ with $V$ the per-fold selected genes ($N$) and $E$ the interactions
+with combined score $\geq 400$, mapped from STRING protein identifiers to HGNC
+symbols via the alias table. The graph is induced on the selected genes and rebuilt
+per fold. The Shortest Path Distance matrix $\mathbf{D}_{SPD} \in \mathbb{R}^{N
+\times N}$ is computed with a cutoff $D_{max}$; unreachable pairs are assigned
+$D_{max}+1$. Each integer distance maps to a learnable per-head scalar bias bounded
+by $\tanh$.
+
+\subsection*{Model Optimization and Hyperparameters}
+MOGFormer is trained with AdamW ($\eta = 10^{-4}$, weight decay $10^{-4}$), token
+dimension $d=128$, $K=8$ latent pathway tokens, and the Multi-Class Focal Loss
+($\gamma=2.0$, square-root-dampened class weights). Early stopping monitors inner-
+validation macro-F1. \todo{Align the following to the code you are running: the
+current configuration uses $L=1$ global transformer layer and $D_{max}=10$ }
+
+% =====================================================================
+% REFERENCES
+% =====================================================================
+% NOTE: bibliographic details below are landmark works cited throughout; please
+% verify exact volume/page/DOI against your reference manager before submission.
+\normalsize
+\begin{thebibliography}{99}
+\small
+\bibitem{parker2009pam50} Parker, J.S., \textit{et al.} Supervised risk predictor
+of breast cancer based on intrinsic subtypes. \textit{J. Clin. Oncol.} (2009).
+\bibitem{tcga2012brca} The Cancer Genome Atlas Network. Comprehensive molecular
+portraits of human breast tumours. \textit{Nature} (2012).
+\bibitem{ying2021graphormer} Ying, C., \textit{et al.} Do Transformers Really
+Perform Bad for Graph Representation? \textit{NeurIPS} (2021).
+\bibitem{fadlallah2025} Fadlallah, S.A. Graphormer-Boosted: Molecular Property
+Prediction with Enhanced Graph Spatial and Edge Encodings (2025).
+\bibitem{dwivedi2022rwpe} Dwivedi, V.P., \textit{et al.} Graph Neural Networks with
+Learnable Structural and Positional Representations. \textit{ICLR} (2022).
+\bibitem{gorishniy2022} Gorishniy, Y., Rubachev, I., Babenko, A. On Embeddings for
+Numerical Features in Tabular Deep Learning. \textit{NeurIPS} (2022).
+\bibitem{lin2017focal} Lin, T.-Y., \textit{et al.} Focal Loss for Dense Object
+Detection. \textit{ICCV} (2017).
+\bibitem{wang2021mogonet} Wang, T., \textit{et al.} MOGONET integrates multi-omics
+data using graph convolutional networks. \textit{Nat. Commun.} (2021).
+\bibitem{hollmann2023tabpfn} Hollmann, N., \textit{et al.} TabPFN: A Transformer
+That Solves Small Tabular Classification Problems in a Second. \textit{ICLR} (2023).
+\bibitem{szklarczyk2023string} Szklarczyk, D., \textit{et al.} The STRING database:
+protein--protein association networks. \textit{Nucleic Acids Res.} (2023).
+\bibitem{nadeau2003} Nadeau, C., Bengio, Y. Inference for the Generalization Error.
+\textit{Machine Learning} (2003).
+\bibitem{demsar2006} Dem\v{s}ar, J. Statistical Comparisons of Classifiers over
+Multiple Data Sets. \textit{J. Mach. Learn. Res.} (2006).
+\end{thebibliography}
+
+\end{document}

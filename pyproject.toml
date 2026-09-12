@@ -1,0 +1,160 @@
+[project]
+name = "mogformer"
+version = "0.1.0.dev0"
+description = "A multi-omics graph transformer for breast cancer characterisation"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "Jean-Baptiste Bobant", email = "bobantjeanbaptiste@gmail.com" }]
+keywords = ["multi-omics", "graph-transformer", "breast-cancer", "bioinformatics"]
+
+dependencies = [
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "scipy>=1.13",
+    "scikit-learn>=1.5",
+    "torch>=2.4",
+    "matplotlib>=3.10",
+    "seaborn>=0.13",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+# Classical baseline suite.
+baselines = [
+    "xgboost>=2.1",
+]
+# Survival, clustering and figure generation for the analysis phases.
+analysis = [
+    "lifelines>=0.29",
+    "umap-learn>=0.5",
+    "upsetplot>=0.9",
+    "statsmodels>=0.14",
+]
+
+[project.scripts]
+mogformer = "mogformer.cli.__main__:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=5.0",
+    "ruff>=0.7",
+    "mypy>=1.11",
+    "pandas-stubs",
+    "types-pyyaml",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mogformer"]
+
+# ---------------------------------------------------------------------------
+# uv
+# ---------------------------------------------------------------------------
+[tool.uv]
+default-groups = ["dev"]
+
+# CPU-only torch: training runs on Kaggle GPUs, local installs only need to be
+# able to execute the test suite on synthetic data.
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+# ---------------------------------------------------------------------------
+# ruff
+# ---------------------------------------------------------------------------
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+# Unmigrated data-acquisition and figure scripts keep their original style
+# until they are folded into the package.
+extend-exclude = ["scripts"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # import sorting
+    "N",    # pep8-naming
+    "D",    # pydocstyle
+    "UP",   # pyupgrade
+    "B",    # bugbear
+    "A",    # builtin shadowing
+    "C4",   # comprehensions
+    "SIM",  # simplify
+    "PTH",  # pathlib over os.path
+    "RUF",
+]
+ignore = [
+    "D107",  # __init__ docstring; the class docstring documents construction
+    "D203",  # incompatible with D211
+    "D213",  # incompatible with D212
+    "N812",  # `torch.nn.functional as F` is the universal PyTorch convention
+]
+
+# En dash and friends are correct typography in this domain
+# (protein-protein, Floyd-Warshall, Nadeau-Bengio, numeric ranges).
+allowed-confusables = ["–", "—", "−", "ρ", "≥", "≤"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+# `X` is mandated by the scikit-learn estimator contract (fit(X, y)).
+"src/mogformer/data/preprocess.py" = ["N803"]
+"src/mogformer/evaluation/estimator.py" = ["N803"]
+"src/mogformer/evaluation/registry.py" = ["N803"]
+"tests/**" = ["D100", "D103"]
+"**/__init__.py" = ["D104"]
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-q --strict-markers --strict-config"
+markers = [
+    "slow: takes more than a few seconds",
+    "needs_data: requires the real cohort rather than synthetic fixtures",
+]
+filterwarnings = ["error::DeprecationWarning:mogformer.*"]
+
+# ---------------------------------------------------------------------------
+# mypy
+# ---------------------------------------------------------------------------
+[tool.mypy]
+# No explicit python_version: mypy tracks the interpreter in .venv. Language
+# level compatibility with the 3.11 floor is enforced by ruff target-version.
+files = ["src/mogformer", "utils"]
+strict_equality = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+module = [
+    "matplotlib.*",
+    "seaborn.*",
+    "sklearn.*",
+    "scipy.*",
+    "umap.*",
+    "upsetplot.*",
+    "lifelines.*",
+    "xgboost.*",
+]
+ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["src/mogformer"]
+branch = true

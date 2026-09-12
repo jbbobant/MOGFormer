@@ -1,0 +1,35 @@
+{
+  "sign_concordance": {
+    "n_edges": 903,
+    "concordant": 542,
+    "rate": 0.6002214839424141,
+    "binom_p": 9.299732911163857e-10
+  },
+  "act_vs_repr": {
+    "n_act": 697,
+    "n_repr": 206,
+    "act_median": 0.0016015601593423337,
+    "repr_median": 0.0009523036353515861,
+    "mw_p_act_gt_repr": 0.012403209926051532
+  },
+  "edge_vs_nonedge": {
+    "n_edge": 903,
+    "n_ctrl": 903,
+    "edge_absmedian": 0.002242913497022542,
+    "ctrl_absmedian": 0.0014957296374833314,
+    "mw_p_edge_stronger": 3.394882180582637e-15
+  },
+  "trans_exists": {
+    "edge_slope_absmedian": 0.002242913497022542,
+    "frac_edges_CI_excl_0": 0.9811738648947951,
+    "wilcoxon_p": 9.70090829381118e-51
+  },
+  "vs_coexpression": {
+    "spearman_slope_vs_obscoexpr": 0.6775546430563336
+  },
+  "permute_graph_null": {
+    "real_absmedian": 0.002242913497022542,
+    "null_absmedian": 0.0014332904013906356,
+    "retained_pct": 63.90306194569351
+  }
+}

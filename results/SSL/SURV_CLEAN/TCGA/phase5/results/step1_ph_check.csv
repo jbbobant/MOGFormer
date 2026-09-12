@@ -1,0 +1,5 @@
+model,cluster_schoenfeld_p,global_schoenfeld_p,min_p_term
+Unadjusted,0.5786349365487178,0.5786349365487178,cluster
++ Age,0.5414219885488829,0.2816929433889105,age
++ Age + Stage (ord.),0.20053975441189745,0.20053975441189745,cluster
++ Age + Stage (bin.),0.268194115118292,0.268194115118292,cluster

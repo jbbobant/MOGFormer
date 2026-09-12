@@ -1,0 +1,2 @@
+oof_cindex,ci_low,ci_high,n,events,n_boot,per_fold_C_mean,per_fold_C_sd,l1_ratio,n_folds
+0.45,0.31271542917044226,0.5776110790583936,334,35,2000,0.44660201264512694,0.13904384044288892,0.5,25

@@ -1,0 +1,157 @@
+{
+  "ER_IHC": {
+    "stratify_by": "ER_IHC",
+    "n_strata": 2,
+    "pooled": {
+      "concordance": 0.5475113122171946,
+      "n_edges": 663,
+      "null_mean": 0.5337315233785822,
+      "perm_p": 0.239880059970015
+    },
+    "best_stratum": {
+      "concordance": 0.5429864253393665,
+      "n_edges": 663,
+      "null_mean": 0.5297209653092005,
+      "null_sd": 0.016182400724396077,
+      "perm_p": 0.2433783108445777,
+      "heterogeneity_gain": 0.013265460030165932
+    },
+    "per_stratum": {
+      "ER_IHC=Negative": {
+        "concordance": 0.5460030165912518,
+        "n_edges": 663,
+        "n_patients": 306
+      },
+      "ER_IHC=Positve": {
+        "concordance": 0.5580693815987934,
+        "n_edges": 663,
+        "n_patients": 1086
+      }
+    }
+  },
+  "CLAUDIN_SUBTYPE": {
+    "stratify_by": "CLAUDIN_SUBTYPE",
+    "n_strata": 6,
+    "pooled": {
+      "concordance": 0.5475113122171946,
+      "n_edges": 663,
+      "null_mean": 0.5337315233785822,
+      "perm_p": 0.239880059970015
+    },
+    "best_stratum": {
+      "concordance": 0.5384615384615384,
+      "n_edges": 663,
+      "null_mean": 0.5257707390648566,
+      "null_sd": 0.01630080363899336,
+      "perm_p": 0.24387806096951525,
+      "heterogeneity_gain": 0.012690799396681829
+    },
+    "per_stratum": {
+      "CLAUDIN_SUBTYPE=Basal": {
+        "concordance": 0.5248868778280543,
+        "n_edges": 663,
+        "n_patients": 144
+      },
+      "CLAUDIN_SUBTYPE=Her2": {
+        "concordance": 0.521870286576169,
+        "n_edges": 663,
+        "n_patients": 174
+      },
+      "CLAUDIN_SUBTYPE=LumA": {
+        "concordance": 0.5460030165912518,
+        "n_edges": 663,
+        "n_patients": 500
+      },
+      "CLAUDIN_SUBTYPE=LumB": {
+        "concordance": 0.5444947209653092,
+        "n_edges": 663,
+        "n_patients": 339
+      },
+      "CLAUDIN_SUBTYPE=Normal": {
+        "concordance": 0.5460030165912518,
+        "n_edges": 663,
+        "n_patients": 115
+      },
+      "CLAUDIN_SUBTYPE=claudin-low": {
+        "concordance": 0.5460030165912518,
+        "n_edges": 663,
+        "n_patients": 138
+      }
+    }
+  },
+  "INTCLUST": {
+    "stratify_by": "INTCLUST",
+    "n_strata": 11,
+    "pooled": {
+      "concordance": 0.5475113122171946,
+      "n_edges": 663,
+      "null_mean": 0.5337315233785822,
+      "perm_p": 0.239880059970015
+    },
+    "best_stratum": {
+      "concordance": 0.55052790346908,
+      "n_edges": 663,
+      "null_mean": 0.5242956259426846,
+      "null_sd": 0.016543076636793858,
+      "perm_p": 0.07196401799100449,
+      "heterogeneity_gain": 0.026232277526395342
+    },
+    "per_stratum": {
+      "INTCLUST=1": {
+        "concordance": 0.48868778280542985,
+        "n_edges": 663,
+        "n_patients": 97
+      },
+      "INTCLUST=10": {
+        "concordance": 0.530920060331825,
+        "n_edges": 663,
+        "n_patients": 155
+      },
+      "INTCLUST=2": {
+        "concordance": 0.5686274509803921,
+        "n_edges": 663,
+        "n_patients": 54
+      },
+      "INTCLUST=3": {
+        "concordance": 0.5158371040723982,
+        "n_edges": 663,
+        "n_patients": 214
+      },
+      "INTCLUST=4ER+": {
+        "concordance": 0.5339366515837104,
+        "n_edges": 663,
+        "n_patients": 172
+      },
+      "INTCLUST=4ER-": {
+        "concordance": 0.5324283559577677,
+        "n_edges": 663,
+        "n_patients": 50
+      },
+      "INTCLUST=5": {
+        "concordance": 0.5354449472096531,
+        "n_edges": 663,
+        "n_patients": 139
+      },
+      "INTCLUST=6": {
+        "concordance": 0.5067873303167421,
+        "n_edges": 663,
+        "n_patients": 61
+      },
+      "INTCLUST=7": {
+        "concordance": 0.5490196078431373,
+        "n_edges": 663,
+        "n_patients": 135
+      },
+      "INTCLUST=8": {
+        "concordance": 0.5520361990950227,
+        "n_edges": 663,
+        "n_patients": 230
+      },
+      "INTCLUST=9": {
+        "concordance": 0.5324283559577677,
+        "n_edges": 663,
+        "n_patients": 109
+      }
+    }
+  }
+}

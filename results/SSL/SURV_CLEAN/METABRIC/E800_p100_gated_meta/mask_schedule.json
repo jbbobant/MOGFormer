@@ -1,0 +1,11 @@
+{
+  "mask_gene_frac": 0.15,
+  "mask_modality_frac": 0.15,
+  "mask_modality_weights": [
+    2.0,
+    1.0,
+    1.0
+  ],
+  "swept": true,
+  "sweep_note": "flat landscape on this axis; kept 0.15/0.15 from prior sweep"
+}

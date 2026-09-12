@@ -1,0 +1,11 @@
+variant,scaling,burden_AUC,ARI_to_U2,dims
+U0,zscore,0.511,0.0,128
+U0,raw,0.501,-0.001,128
+U0b,zscore,0.999,0.976,128
+U0b,raw,0.999,0.976,128
+U1,zscore,1.0,1.0,128
+U1,raw,0.999,0.988,128
+U2,zscore,1.0,1.0,128
+U2,raw,0.999,0.988,128
+MOFA+,zscore,0.523,-0.002,15
+MOFA+,raw,0.993,0.94,15

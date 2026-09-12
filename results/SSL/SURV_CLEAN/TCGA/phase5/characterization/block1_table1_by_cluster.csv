@@ -1,0 +1,10 @@
+variable,A,B,test,p,effect
+age,60.0,60.0,MWU,0.9915923693488696,d=0.01
+stage,(dist),(dist),chi2,0.8524007430022424,
+path_N,(dist),(dist),chi2,0.8825943346725754,
+PFI_events,22,13,,,
+OS_events,22,16,,,
+DSS_events,11,7,,,
+DFI_events,8,8,,,
+clinical__treatments.treatment_or_therapy,(dist),(dist),chi2,0.566292694319243,
+clinical__treatments.treatment_type,(dist),(dist),chi2,0.9208599664738198,

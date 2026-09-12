@@ -1,0 +1,62 @@
+{
+  "_provenance": {
+    "purpose": "Curated set of genes with well-established PROMOTER-HYPERMETHYLATION silencing in breast cancer, for the MOGFormer rho_pred specificity (§3.2) and sign-sanity (§4) tests.",
+    "selection_rules": [
+      "Pan-breast-cancer silencing (NOT restricted to a single subtype).",
+      "Subtype-conditional / subtype-DEFINING silencers excluded (ESR1, PGR, BRCA1).",
+      "Every gene verified present in the 433-gene MOGFormer universe (else unaddressable).",
+      "Promoter hypermethylation -> transcriptional repression is the documented mechanism (not gene-body / enhancer effects)."
+    ],
+    "note_on_LumA": "The encoder was pretrained on FULL BRCA, so pan-BC silencers are the right sign-gate reference regardless of the LumA probe cohort. For the LumA-cohort specificity test, pan-BC (non-subtype) silencers are the correct choice; ESR1/PGR/BRCA1 would leak subtype identity.",
+    "caveats": {
+      "CDH1": "Promoter methylation occurs across BC but is enriched in lobular carcinoma; keep, but flag if it behaves as an outlier.",
+      "TWIST1": "Silencing well-documented but more variable/EMT-context-dependent; placed in tier-2/optional."
+    }
+  },
+
+  "sign_gate": {
+    "_use": "§4 sign-sanity gate. If ANY of these does not read rho_pred < 0, STOP: the sign is flipped.",
+    "genes": ["RASSF1", "SCGB3A1", "CDKN2A"],
+    "rationale": {
+      "RASSF1": "RASSF1A promoter hypermethylation is the single most frequently methylated locus in breast cancer, essentially pan-subtype.",
+      "SCGB3A1": "HIN-1; canonical breast promoter-hypermethylation-silenced gene, very high methylation frequency.",
+      "CDKN2A": "p16INK4a promoter hypermethylation, classic tumor-suppressor silencing."
+    }
+  },
+
+  "curated_silenced": {
+    "_use": "§3.2 specificity test (curated vs all-other-genes, one-sided Mann-Whitney, expect more negative).",
+    "tier1_rock_solid": ["RASSF1", "SCGB3A1", "CDKN2A", "PYCARD", "APC", "GSTP1"],
+    "tier1_wnt_antagonists": ["SFRP1", "SFRP2", "SFRP4", "WIF1"],
+    "tier2_well_supported": ["CDH1", "RARRES1", "ID4", "CCND2"],
+    "optional_variable": ["TWIST1"],
+    "rationale": {
+      "PYCARD": "TMS1/ASC; methylation-silenced in breast, classic apoptosis-linked TSG.",
+      "APC": "APC promoter-1A hypermethylation is frequent in breast carcinoma.",
+      "GSTP1": "Detoxification gene silenced by promoter hypermethylation in breast (and prostate).",
+      "SFRP1": "Secreted Wnt antagonist; very frequent promoter hypermethylation, poor-prognosis associated.",
+      "SFRP2": "Wnt antagonist, frequently hypermethylated in breast.",
+      "SFRP4": "Wnt antagonist, hypermethylated in breast.",
+      "WIF1": "Wnt inhibitory factor 1; promoter hypermethylation across BC.",
+      "CDH1": "E-cadherin promoter methylation (see caveat).",
+      "RARRES1": "TIG1; retinoid-responsive TSG silenced by promoter hypermethylation.",
+      "ID4": "Promoter hypermethylation reported in breast, prognosis-associated.",
+      "CCND2": "Cyclin D2 paradoxical promoter-hypermethylation silencing in breast.",
+      "TWIST1": "Promoter methylation documented; variable (see caveat)."
+    }
+  },
+
+  "excluded_subtype_conditional": {
+    "_use": "Documented as EXCLUDED to honor the spec. Do not place in the curated denominator.",
+    "genes": {
+      "ESR1": "Methylation silences ER -> defines ER-negativity (subtype-defining).",
+      "PGR": "Analogous to ESR1 for PR.",
+      "BRCA1": "Promoter hypermethylation strongly basal/TNBC-enriched; usable for pan-BC sign gate only, NOT LumA specificity."
+    }
+  },
+
+  "driver_amplicon_contrast": {
+    "_use": "§3.3 known-locus curves. AMPLIFIED oncogenes: expected NULL or non-silencing methylation coupling; serve as a biological contrast to the silenced set and connect to the CNV-burden axis (§3.5).",
+    "genes": ["CCND1", "MDM2", "AURKA", "PPM1D", "FGF3", "FGF19"]
+  }
+}

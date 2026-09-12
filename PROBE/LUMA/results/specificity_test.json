@@ -1,0 +1,16 @@
+{
+  "rho_pred": {
+    "mann_whitney_p": 0.6006947185863935,
+    "curated_median": -0.22187342049250355,
+    "control_median": -0.22661878564465618,
+    "n_curated": 15,
+    "n_control": 418
+  },
+  "Delta": {
+    "mann_whitney_p": 0.467781162866642,
+    "curated_median": -0.2985144257545471,
+    "control_median": -0.3012596517801285,
+    "n_curated": 15,
+    "n_control": 418
+  }
+}

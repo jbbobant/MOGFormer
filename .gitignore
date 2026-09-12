@@ -221,7 +221,58 @@ __marimo__/
 viz/
 data/
 
-results/
+# (results/ handled explicitly in the project section below)
 save/
 .pdf
 .tex
+
+# graft's local graph cache — regenerable, not committed (run `graft build`).
+/graft/
+
+# --- MOGFormer project ---
+# Cohort data (~5.6 GB); see README for provenance and download steps.
+data/
+"MOGFORMER BL"/data/
+
+# Model checkpoints and tensor dumps
+*.pt
+*.pth
+
+# Local environments
+.venv/
+.claude/
+graft/
+
+# Tooling caches
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+
+# --- results: commit the evidence, not the bulk -------------------------------
+# 186 text artifacts (~3 MB) are the evidence behind every claim, so they go in.
+# 657 per-run PNGs (~227 MB) and 214 MB of checkpoints and embeddings do not;
+# the figures that support a stated finding are re-included by name below.
+results/**
+!results/**/
+!results/**/*.csv
+!results/**/*.md
+!results/**/*.json
+!results/**/*.yaml
+!results/**/*.yml
+!results/**/*.tsv
+!results/**/*.txt
+!results/**/*.tex
+
+# Figures that support a stated finding.
+!results/SSL/SURV_CLEAN/TCGA/phase4/figures/*.png
+!results/SSL/SURV_CLEAN/TCGA/phase5/figures/*.png
+!results/baselines/figures_5classes/*.png
+
+# Derived artifacts, regenerable from the code and the cohort.
+*.parquet
+*.npy
+results/**/*.pdf
+results/ 
+
+# One 16 MB raster; its vector twin is committed instead.
+figures/grn_network_overview.png

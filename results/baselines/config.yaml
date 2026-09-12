@@ -1,0 +1,87 @@
+seed: 42
+paths:
+  curated_genes_file: CGenes.txt
+  pam50_genes_file: PAM50.txt
+files:
+  rna: data_rna_seq_v2_rsem.csv
+  cnv: data_cnv.csv
+  methy: data_methylation450.csv
+  clin: data_clinical.csv
+cv:
+  n_splits: 5
+  n_repeats: 5
+inner:
+  n_splits: 3
+  n_iter: 20
+preprocess:
+  top_k: 100
+  mad_on_log_rna: false
+models:
+  svm_kernel: linear
+  xgb_device: cpu
+experiments:
+  reference_modalities:
+  - rna
+  - cnv
+  - methy
+  modality_grid:
+  - - rna
+  - - cnv
+  - - methy
+  - - rna
+    - cnv
+  - - rna
+    - methy
+  - - cnv
+    - methy
+  - - rna
+    - cnv
+    - methy
+  gene_count_grid:
+  - 100
+  - 200
+  - 500
+  - 1000
+  - 2000
+  learning_fractions:
+  - 0.25
+  - 0.5
+  - 0.75
+  - 1.0
+  late_fusion_models:
+  - B2_elasticnet_logreg
+  - B3_linear_svm
+  - B4_random_forest
+  - B5_xgboost
+calibration_focus:
+- BRCA_Her2
+- BRCA_Normal
+- BRCA_Basal
+- BRCA_LumA
+- BRCA_LumB
+sanity_genes:
+- ESR1
+- ERBB2
+- MKI67
+- FOXA1
+- GATA3
+- PGR
+- AURKA
+- BCL2
+versions:
+  python: 3.14.4
+  numpy: 2.4.4
+  pandas: 2.3.3
+  sklearn: 1.8.0
+  scipy: 1.17.1
+  xgboost: 3.2.0
+resolved:
+  n_patients: 914
+  n_common_genes: 13069
+  n_curated_in_universe: 232
+  n_pam50_in_universe: 43
+  class_counts:
+    BRCA_Basal: 163
+    BRCA_Her2: 77
+    BRCA_LumA: 480
+    BRCA_LumB: 194

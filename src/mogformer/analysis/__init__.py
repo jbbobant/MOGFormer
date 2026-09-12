@@ -1,0 +1,126 @@
+"""Downstream analysis of the frozen representation.
+
+Pretraining, clustering, survival and the interventional probes. Every module
+here consumes the encoder frozen by :mod:`mogformer.analysis.embedding` and none
+of them may write back to it.
+"""
+
+from __future__ import annotations
+
+from mogformer.analysis.clustering import (
+    ConsensusResult,
+    RepresentationRung,
+    compare_representations,
+    partition_agreement,
+    proportion_ambiguous_clustering,
+    run_consensus_clustering,
+    screen_covariates,
+    silhouette_full_versus_pcs,
+    zca_whiten,
+)
+from mogformer.analysis.embedding import (
+    PretrainingBundle,
+    build_frozen_axes,
+    extract_embeddings,
+    identify_subtype_patients,
+    load_pretraining_bundle,
+    run_pretraining,
+    save_pretraining_bundle,
+    split_train_monitor,
+    subtype_slice,
+)
+from mogformer.analysis.plots import (
+    CLUSTER_COLOURS,
+    plot_confound_screen,
+    plot_consensus_heatmap,
+    plot_hazard_forest,
+    plot_kaplan_meier,
+    plot_representation_ladder,
+    plot_response_curves,
+    plot_sign_concordance,
+    plot_stability_by_k,
+    plot_trans_versus_coexpression,
+)
+from mogformer.analysis.probe_cis import (
+    DEFAULT_GRID,
+    GridRankCorrelation,
+    ResponseStatistics,
+    make_gene_batches,
+    parity_check,
+    patient_slopes,
+    probe_genes,
+    run_cis_map,
+    summarise_response,
+)
+from mogformer.analysis.probe_trans import (
+    MASK_MODES,
+    SignConcordanceResult,
+    magnitude_tests,
+    permuted_graph_retention,
+    probe_transcription_factor,
+    run_trans_sweep,
+    sign_permutation_test,
+)
+from mogformer.analysis.survival import (
+    CoxResult,
+    adjustment_ladder,
+    describe_followup,
+    fit_cox,
+    logrank_p_value,
+    proportional_hazards_check,
+    restricted_mean_survival_difference,
+)
+
+__all__ = [
+    "CLUSTER_COLOURS",
+    "DEFAULT_GRID",
+    "MASK_MODES",
+    "ConsensusResult",
+    "CoxResult",
+    "GridRankCorrelation",
+    "PretrainingBundle",
+    "RepresentationRung",
+    "ResponseStatistics",
+    "SignConcordanceResult",
+    "adjustment_ladder",
+    "build_frozen_axes",
+    "compare_representations",
+    "describe_followup",
+    "extract_embeddings",
+    "fit_cox",
+    "identify_subtype_patients",
+    "load_pretraining_bundle",
+    "logrank_p_value",
+    "magnitude_tests",
+    "make_gene_batches",
+    "parity_check",
+    "partition_agreement",
+    "patient_slopes",
+    "permuted_graph_retention",
+    "plot_confound_screen",
+    "plot_consensus_heatmap",
+    "plot_hazard_forest",
+    "plot_kaplan_meier",
+    "plot_representation_ladder",
+    "plot_response_curves",
+    "plot_sign_concordance",
+    "plot_stability_by_k",
+    "plot_trans_versus_coexpression",
+    "probe_genes",
+    "probe_transcription_factor",
+    "proportion_ambiguous_clustering",
+    "proportional_hazards_check",
+    "restricted_mean_survival_difference",
+    "run_cis_map",
+    "run_consensus_clustering",
+    "run_pretraining",
+    "run_trans_sweep",
+    "save_pretraining_bundle",
+    "screen_covariates",
+    "sign_permutation_test",
+    "silhouette_full_versus_pcs",
+    "split_train_monitor",
+    "subtype_slice",
+    "summarise_response",
+    "zca_whiten",
+]

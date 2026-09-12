@@ -1,0 +1,124 @@
+{
+  "whole_gene": {
+    "mask_mode": "whole_gene",
+    "trans_magnitude": {
+      "edge_absmedian": 0.002243701593743707,
+      "edge_abs_iqr": [
+        0.000990479518788071,
+        0.005823009175521533
+      ],
+      "frac_edges_CI_excl_0": 0.9867109634551495,
+      "wilcoxon_p": 8.618184548866025e-45,
+      "vs_cis": {
+        "methy->rna": {
+          "cis_absmedian": 0.11227199832581769,
+          "trans_over_cis_pct": 1.9984516417285083
+        },
+        "cnv->rna": {
+          "cis_absmedian": 0.17046173195451758,
+          "trans_over_cis_pct": 1.3162494408670968
+        }
+      }
+    },
+    "sign_concordance": {
+      "n_edges": 903,
+      "concordant": 539,
+      "rate": 0.5968992248062015,
+      "null_mean_rate": 0.5814347729789591,
+      "null_sd_rate": 0.013379185398726942,
+      "perm_p": 0.1404859514048595,
+      "z": 1.1558589978664882,
+      "frac_slope_positive": 0.6500553709856035,
+      "trivial_majority_baseline": 0.7718715393133998,
+      "beats_trivial_baseline": false
+    },
+    "act_vs_repr": {
+      "n_act": 697,
+      "n_repr": 206,
+      "act_median": 0.0014514786218676496,
+      "repr_median": 0.0009805737157915053,
+      "mw_p_act_gt_repr": 0.014318153300721457
+    },
+    "edge_vs_nonedge": {
+      "n_edge": 903,
+      "n_ctrl": 903,
+      "edge_absmedian": 0.002243701593743707,
+      "ctrl_absmedian": 0.0014601405198252542,
+      "ratio": 1.536634017945223,
+      "mw_p_edge_stronger": 2.0956899476509047e-17
+    },
+    "vs_coexpression": {
+      "spearman_slope_vs_obscoexpr": 0.6966393664949088
+    },
+    "tf_degree_confound": {
+      "spearman_meanabs_vs_ntargets": 0.14338263968984083,
+      "note": "strong negative => TFs look strong only because they have few targets"
+    },
+    "permute_grn_only": {
+      "real_absmedian": 0.002243701593743707,
+      "null_absmedian": 0.0024225839207018584,
+      "retained_pct": 107.97264339682886
+    },
+    "permute_graph": {
+      "real_absmedian": 0.002243701593743707,
+      "null_absmedian": 0.001457480210171756,
+      "retained_pct": 64.95873668030387
+    }
+  },
+  "rna_only": {
+    "mask_mode": "rna_only",
+    "trans_magnitude": {
+      "edge_absmedian": 0.002242913497022542,
+      "edge_abs_iqr": [
+        0.0009334651177662707,
+        0.006388030273536032
+      ],
+      "frac_edges_CI_excl_0": 0.9811738648947951,
+      "wilcoxon_p": 9.70090829381118e-51,
+      "vs_cis": {
+        "methy->rna": {
+          "cis_absmedian": 0.11227199832581769,
+          "trans_over_cis_pct": 1.9977496886743924
+        },
+        "cnv->rna": {
+          "cis_absmedian": 0.17046173195451758,
+          "trans_over_cis_pct": 1.3157871102829073
+        }
+      }
+    },
+    "sign_concordance": {
+      "n_edges": 903,
+      "concordant": 542,
+      "rate": 0.6002214839424141,
+      "null_mean_rate": 0.5857304540420819,
+      "null_sd_rate": 0.013252214898534958,
+      "perm_p": 0.15548445155484453,
+      "z": 1.093479845541463,
+      "frac_slope_positive": 0.6578073089700996,
+      "trivial_majority_baseline": 0.7718715393133998,
+      "beats_trivial_baseline": false
+    },
+    "act_vs_repr": {
+      "n_act": 697,
+      "n_repr": 206,
+      "act_median": 0.0016015601593423337,
+      "repr_median": 0.0009523036353515861,
+      "mw_p_act_gt_repr": 0.012403209926051532
+    },
+    "edge_vs_nonedge": {
+      "n_edge": 903,
+      "n_ctrl": 903,
+      "edge_absmedian": 0.002242913497022542,
+      "ctrl_absmedian": 0.0014957296374833314,
+      "ratio": 1.499544731089503,
+      "mw_p_edge_stronger": 3.394882180582637e-15
+    },
+    "vs_coexpression": {
+      "spearman_slope_vs_obscoexpr": 0.6775546430563336
+    },
+    "tf_degree_confound": {
+      "spearman_meanabs_vs_ntargets": 0.20350425241336867,
+      "note": "strong negative => TFs look strong only because they have few targets"
+    }
+  }
+}

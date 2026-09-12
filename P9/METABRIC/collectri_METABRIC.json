@@ -1,0 +1,17 @@
+{
+  "cohort": "METABRIC",
+  "n_edges_tested": 663,
+  "n_edges_total": 663,
+  "coverage": 1.0,
+  "n_act": 504,
+  "n_repr": 159,
+  "act_coexpr_median": 0.02256925453164923,
+  "repr_coexpr_median": 0.008807920185121935,
+  "pct_act_positive": 57.341269841269835,
+  "pct_repr_negative": 46.540880503144656,
+  "data_sign_concordance": 0.5475113122171946,
+  "trivial_majority_baseline": 0.7601809954751131,
+  "beats_trivial": false,
+  "binom_p_vs_half": 0.007990770931722324,
+  "mw_p_act_gt_repr": 0.12878832406036161
+}

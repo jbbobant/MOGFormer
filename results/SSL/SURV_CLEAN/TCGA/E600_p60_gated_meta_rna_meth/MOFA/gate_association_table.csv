@@ -1,0 +1,10 @@
+covariate,kind,effect,p_raw,p_holm,n,note
+clinical__demographic.race,categorical,0.14273946274233687,0.03467274154606966,0.2773819323685573,330,3 levels
+clinical__demographic.ethnicity,categorical,0.07000861213901761,0.35691587914985023,1.0,305,2 levels
+clinical__diagnoses.ajcc_staging_system_edition,categorical,0.09103397477376636,0.47930407922683904,1.0,299,4 levels
+clinical__diagnoses.year_of_diagnosis,continuous,0.052315740581040854,0.28979542639427935,1.0,334,median A=2010.0 vs B=2010.0
+clinical__diagnoses.classification_of_tumor,categorical,0.07869952624584439,0.8395643277874434,1.0,334,6 levels
+clinical__demographic.age_at_index,continuous,0.2520721047532657,2.6556860705017687e-06,2.3901174634515918e-05,335,median A=66.0 vs B=58.0
+clinical__diagnoses.ajcc_pathologic_stage,categorical,0.13885027297957836,0.8439209200723137,1.0,333,12 levels
+clinical__diagnoses.ajcc_pathologic_n,categorical,0.20992583890005717,0.3223766097110506,1.0,335,14 levels
+clinical__diagnoses.ajcc_pathologic_m,categorical,0.14942991934230354,0.05806638704504877,0.4064647093153414,335,4 levels
