@@ -45,7 +45,7 @@ Source: METABRIC via cBioPortal.
 | --- | --- |
 | `data/clean/9606.protein.links.v12.0.txt`, `data/clean/9606.protein.aliases.v12.0.txt` | STRING v12.0, human (string-db.org) |
 | `data/clean/9606.protein.links.detailed.v12.5.txt` | STRING v12.5 detailed links (experimental and database channels) |
-| `data/clean/collectri_signed_edges.tsv` | CollecTRI signed TF → target edges, via decoupleR/OmniPath (`scripts/legacy/download_collectri_grn.py`) |
+| `data/clean/collectri_signed_edges.tsv` | CollecTRI signed TF → target edges, from OmniPath via decoupleR (`decoupler.op.collectri(organism="human")`), written as a TSV with columns `source`, `target`, `sign` (±1), `n_sources` |
 | `data/raw/PAM50.txt` | The 50 PAM50 genes |
 | `data/raw/CGenes.txt` | Curated breast-cancer genes, force-included in every gene axis |
 | `data/raw/FROGS-ARCHS4/FROGS-ARCHS4_emb.csv`, `..._symbollist.txt` | Pretrained gene vectors (FRoGS, ARCHS4), used by one supervised variant |
@@ -65,7 +65,6 @@ Source: METABRIC via cBioPortal.
 
 The step from the cBioPortal and GDC downloads to the cleaned matrices above
 (gene alignment, promoter aggregation of methylation probes, the common
-patient axis) was done in `scripts/legacy/methylation_preprocessing.ipynb` and
-earlier scripts, with paths specific to the original machine. It is not yet
-part of the package, so the cleaned matrices cannot be regenerated from the
-downloads by a single command. Everything downstream of them can.
+patient axis) was done with notebooks that are not part of this repository.
+It is not yet part of the package, so the cleaned matrices cannot be
+regenerated from the downloads by a single command. Everything downstream of them can.

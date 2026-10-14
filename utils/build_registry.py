@@ -36,10 +36,11 @@ END_MARKER = "<!-- END GENERATED REGISTRY -->"
 #: Directories walked for symbols, relative to the repository root.
 PACKAGE_ROOTS: tuple[str, ...] = ("src/mogformer", "utils")
 
-#: Scripts not yet folded into the package. Reported so the remaining surface
-#: is visible, but excluded from duplicate enforcement because they are
-#: standalone and predate the conventions.
-LEGACY_SOURCES: tuple[str, ...] = ("scripts",)
+#: Tracked code not yet folded into the package. Reported so the remaining
+#: surface is visible, but excluded from duplicate enforcement because it is
+#: standalone and predates the conventions. Empty: everything tracked is in the
+#: package or is a thin entry point.
+LEGACY_SOURCES: tuple[str, ...] = ()
 
 #: Names permitted to recur across modules. Dunder methods and a small set of
 #: conventional hooks are expected to appear once per class or module.

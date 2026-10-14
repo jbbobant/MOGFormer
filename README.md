@@ -123,7 +123,7 @@ traced to the exact settings that produced it.
 | `src/mogformer/analysis/` | Embedding extraction, representation evaluation, clustering, survival, attribution, analysis figures |
 | `src/mogformer/experiments/` | One module per experiment, composing the above |
 | `src/mogformer/cli/` | Command lines: `mogformer` (supervised) and `mogformer.cli.experiments` |
-| `scripts/` | Entry points of the pipeline stages; `scripts/legacy/` holds unmigrated data-preparation and figure code |
+| `scripts/` | Entry points of the pipeline stages |
 | `configs/` | Every experiment's settings, with a README per directory stating its predictions and outcomes |
 | `utils/` | Repository tooling: cohort bundles, the symbol registry, the run index |
 | `tests/` | Unit and integration tests on synthetic data |

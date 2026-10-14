@@ -77,9 +77,6 @@ torch = { index = "pytorch-cu128" }
 [tool.ruff]
 line-length = 88
 target-version = "py311"
-# Unmigrated data-acquisition and figure scripts (scripts/legacy) keep their
-# original style until they are folded into the package.
-extend-exclude = ["scripts/legacy"]
 
 [tool.ruff.lint]
 select = [
@@ -139,7 +136,6 @@ filterwarnings = ["error::DeprecationWarning:mogformer.*"]
 # No explicit python_version: mypy tracks the interpreter in .venv. Language
 # level compatibility with the 3.11 floor is enforced by ruff target-version.
 files = ["src/mogformer", "utils", "scripts"]
-exclude = ["scripts/legacy/"]
 strict_equality = true
 warn_redundant_casts = true
 warn_unused_ignores = true

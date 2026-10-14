@@ -231,6 +231,9 @@ __marimo__/
 /report/
 /MOGFormer.pdf
 
+# Earlier notebooks and scripts, kept locally for reference only.
+/archive/
+
 # Local tooling state.
 /graft/
 .mcp.json
