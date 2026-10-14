@@ -217,62 +217,26 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-# Project specific directories
-viz/
-data/
+# --- MOGFormer ----------------------------------------------------------------
+# Cohort data and every generated output stay out of version control. What the
+# pipeline expects under data/, and where it comes from, is in docs/data.md;
+# results/ is rebuilt by the scripts in scripts/.
+/data/
+/results/
+/figures/
 
-# (results/ handled explicitly in the project section below)
-save/
-.pdf
-.tex
+# Private notes, manuscript drafts and reports.
+/private/
+/report/
+/MOGFormer.pdf
 
-# graft's local graph cache — regenerable, not committed (run `graft build`).
+# Local tooling state.
 /graft/
+/.claude/
+.mcp.json
 
-# --- MOGFormer project ---
-# Cohort data (~5.6 GB); see README for provenance and download steps.
-data/
-"MOGFORMER BL"/data/
-
-# Model checkpoints and tensor dumps
+# Model checkpoints, embeddings and tensor dumps, wherever they are written.
 *.pt
 *.pth
-
-# Local environments
-.venv/
-.claude/
-graft/
-
-# Tooling caches
-.ruff_cache/
-.mypy_cache/
-.pytest_cache/
-
-# --- results: commit the evidence, not the bulk -------------------------------
-# 186 text artifacts (~3 MB) are the evidence behind every claim, so they go in.
-# 657 per-run PNGs (~227 MB) and 214 MB of checkpoints and embeddings do not;
-# the figures that support a stated finding are re-included by name below.
-results/**
-!results/**/
-!results/**/*.csv
-!results/**/*.md
-!results/**/*.json
-!results/**/*.yaml
-!results/**/*.yml
-!results/**/*.tsv
-!results/**/*.txt
-!results/**/*.tex
-
-# Figures that support a stated finding.
-!results/SSL/SURV_CLEAN/TCGA/phase4/figures/*.png
-!results/SSL/SURV_CLEAN/TCGA/phase5/figures/*.png
-!results/baselines/figures_5classes/*.png
-
-# Derived artifacts, regenerable from the code and the cohort.
 *.parquet
 *.npy
-results/**/*.pdf
-results/ 
-
-# One 16 MB raster; its vector twin is committed instead.
-figures/grn_network_overview.png

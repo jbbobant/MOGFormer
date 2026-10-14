@@ -25,9 +25,12 @@ class GraphPositionalEncoding(nn.Module):
     Attributes:
         pe_dim: Width of the produced encoding.
         method: Active scheme, one of :data:`PE_METHODS`.
+        weighted: Whether random walks follow edge weights.
     """
 
-    def __init__(self, pe_dim: int = 32, method: str = "rwpe") -> None:
+    def __init__(
+        self, pe_dim: int = 32, method: str = "rwpe", weighted: bool = False
+    ) -> None:
         """Initialise the encoder.
 
         Args:
@@ -35,6 +38,9 @@ class GraphPositionalEncoding(nn.Module):
                 is the number of random-walk steps; for ``"laplacian"`` it is
                 the number of non-trivial eigenvectors retained.
             method: Encoding scheme, one of :data:`PE_METHODS`.
+            weighted: Let random walks step along an edge with probability
+                proportional to its weight (edge confidence), rather than
+                uniformly over neighbours. Only read by ``"rwpe"``.
 
         Raises:
             ValueError: If ``method`` is unknown or ``pe_dim`` is not positive.
@@ -49,6 +55,7 @@ class GraphPositionalEncoding(nn.Module):
             )
         self.pe_dim = pe_dim
         self.method = method
+        self.weighted = weighted
 
     @torch.no_grad()
     def forward(self, adjacency: torch.Tensor) -> torch.Tensor:
@@ -56,7 +63,8 @@ class GraphPositionalEncoding(nn.Module):
 
         Args:
             adjacency: Square adjacency, shape ``(n_genes, n_genes)``. Any
-                strictly positive entry is treated as an edge.
+                strictly positive entry is an edge; its value is its weight
+                when ``weighted`` is set.
 
         Returns:
             Float tensor of shape ``(n_genes, pe_dim)`` on the same device as
@@ -72,19 +80,22 @@ class GraphPositionalEncoding(nn.Module):
             )
         binary = (adjacency > 0).float()
         if self.method == "rwpe":
-            return self._random_walk(binary)
+            return self._random_walk(
+                adjacency.float().clamp(min=0) if self.weighted else binary
+            )
         return self._laplacian(binary)
 
     def _random_walk(self, adjacency: torch.Tensor) -> torch.Tensor:
         """Return per-node random-walk return probabilities.
 
-        With ``P = D^-1 A`` the row-stochastic transition matrix, dimension
+        With ``P = D^-1 A`` the row-stochastic transition matrix (``D`` the
+        weighted degree when ``A`` carries weights), dimension
         ``k`` of node ``i`` is ``[P^(k+1)]_ii``: the probability that a walk
         starting at ``i`` is back at ``i`` after ``k + 1`` steps. Isolated nodes
         get a clamped degree so the inverse stays finite.
 
         Args:
-            adjacency: Binarised adjacency, shape ``(n_genes, n_genes)``.
+            adjacency: Non-negative adjacency, shape ``(n_genes, n_genes)``.
 
         Returns:
             Float tensor of shape ``(n_genes, pe_dim)``.
@@ -138,3 +149,34 @@ class GraphPositionalEncoding(nn.Module):
         if encoding.shape[1] < self.pe_dim:
             encoding = np.pad(encoding, ((0, 0), (0, self.pe_dim - encoding.shape[1])))
         return torch.tensor(encoding, dtype=torch.float32, device=adjacency.device)
+
+
+def nearest_encoding_distance(encodings: np.ndarray) -> np.ndarray:
+    """Measure how far each node's encoding is from its closest other node's.
+
+    A model without a per-gene identity embedding can tell two genes apart only
+    through their encodings, so genes whose encodings nearly coincide are
+    effectively interchangeable to it. Distances are expressed as a fraction of
+    the encodings' spread (mean distance to their centroid), which makes them
+    comparable across folds and schemes.
+
+    Args:
+        encodings: Node encodings, shape ``(n_nodes, pe_dim)``, at least two.
+
+    Returns:
+        Relative nearest-neighbour distance per node, shape ``(n_nodes,)``.
+        Zero marks a node whose encoding is identical to another node's.
+
+    Raises:
+        ValueError: If fewer than two nodes are given or the encodings do not
+            vary at all.
+    """
+    values = np.asarray(encodings, dtype=float)
+    if values.ndim != 2 or values.shape[0] < 2:
+        raise ValueError(f"need at least two encodings, got shape {values.shape}")
+    spread = float(np.linalg.norm(values - values.mean(axis=0), axis=1).mean())
+    if spread == 0.0:
+        raise ValueError("every encoding is identical; distances are undefined")
+    distances = np.linalg.norm(values[:, None, :] - values[None, :, :], axis=-1)
+    np.fill_diagonal(distances, np.inf)
+    return distances.min(axis=1) / spread

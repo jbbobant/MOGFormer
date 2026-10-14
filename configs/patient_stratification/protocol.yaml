@@ -1,0 +1,38 @@
+# Settings of the pre-registered stratification protocol (README.md in this directory).
+# Runs are pretraining directories under results/experiments/ssl_pretraining; the first
+# seed gives the primary partition, the others only seed agreement.
+cohorts:
+  metabric:
+    bundle: data/bundle/metabric/ssl
+    runs:
+      - metabric_programs_fused_k16_seed42
+      - metabric_programs_fused_k16_seed43
+      - metabric_programs_fused_k16_seed44
+    populations:
+      - METABRIC ER+/HER2−
+      - METABRIC Luminal A
+  tcga:
+    bundle: data/bundle/tcga
+    runs:
+      - tcga_programs_fused_k16_seed42
+      - tcga_programs_fused_k16_seed43
+      - tcga_programs_fused_k16_seed44
+    populations:
+      - TCGA ER+/HER2−
+      - TCGA Luminal A
+discovery_population: METABRIC ER+/HER2−
+replication_population: TCGA ER+/HER2−
+readout: summary
+n_clusters: [2, 3, 4, 5, 6]
+algorithms: [kmeans, gmm]
+n_resample: 500
+subsample_frac: 0.8
+n_bootstrap: 100
+variance_explained: 0.9
+max_components: 32
+bar:
+  pac: 0.10
+  bootstrap_ari: 0.80
+  seed_ari: 0.70
+burden_reproduces_ari: 0.8
+seed: 42

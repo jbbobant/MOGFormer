@@ -1,0 +1,47 @@
+# Sign recovery by in-silico perturbation on cohorts simulated from the
+# CollecTRI signed edges of the TCGA gene axis (433 genes, 903 edges).
+# The encoder's architecture and training settings are read from the archived
+# TCGA encoder, so only the data differ from the real analysis.
+
+# Structure of the causal model, shared by every condition
+# (see mogformer.simulation.scm.SimulationSettings).
+simulation:
+  n_programs: 5
+  regulation_strength: 1.0
+  cnv_effect: 0.6
+  methylation_effect: 0.6
+  amplicon_size: 8
+  amplicon_share: 0.5
+
+monitor_frac: 0.12
+
+# Every condition trains for the same number of optimiser steps: the archived
+# budget (800 epochs, patience 100) applies at 949 patients and shrinks in
+# proportion for larger cohorts.
+step_budget_patients: 949
+
+probe:
+  patients: 1000
+  n_boot: 100
+  n_permutations: 5000
+
+# Confounding 0.8 reproduces TCGA's observed co-expression statistics
+# (edge/non-edge |rho| ratio 1.11 vs 1.23; co-expression sign agreement
+# with CollecTRI 0.635 vs 0.629); 0.0 is the unconfounded reference.
+conditions:
+  - {n_patients: 949,   confounding: 0.8, use_grn: true}
+  - {n_patients: 949,   confounding: 0.8, use_grn: false}
+  - {n_patients: 949,   confounding: 0.0, use_grn: true}
+  - {n_patients: 3000,  confounding: 0.8, use_grn: true}
+  - {n_patients: 3000,  confounding: 0.0, use_grn: true}
+  - {n_patients: 10000, confounding: 0.8, use_grn: true}
+
+# Observed cohorts scored with the same estimators on the same pairs; only the
+# curated sign is known there.
+real_cohorts:
+  - name: TCGA-BRCA
+    encoder: tcga
+    sweep: results/interventional_probe/tcga_mask_mode_contrast/trans_edges.csv
+  - name: METABRIC
+    encoder: metabric
+    sweep: results/experiments/external_trans_sweep/metabric/trans_edges.csv

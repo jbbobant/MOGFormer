@@ -19,6 +19,7 @@ from mogformer.data import (
     OmicsData,
     assert_folds_match,
     assert_no_leakage,
+    beta_to_m_values,
     exclude_classes,
     load_curated_genes,
     load_folds,
@@ -547,3 +548,38 @@ def test_scaler_statistics_differ_between_folds(cohort) -> None:
     second = MultiOmicsTransformer(**kwargs).fit(data.X[data.n_patients // 2 :])
 
     assert not np.allclose(first.scalers_["rna"].mean_, second.scalers_["rna"].mean_)
+
+
+def test_m_values_are_the_clipped_logit_of_beta() -> None:
+    """Midpoint maps to zero, the bounds stay finite, missing stays missing."""
+    beta = pd.DataFrame({"patient": [0.5, 0.8, 0.0, 1.0, np.nan]})
+    m_values = beta_to_m_values(beta)["patient"].to_numpy()
+    assert m_values[0] == pytest.approx(0.0)
+    assert m_values[1] == pytest.approx(2.0)
+    assert np.isfinite(m_values[2:4]).all()
+    assert m_values[2] == pytest.approx(-m_values[3])
+    assert np.isnan(m_values[4])
+
+
+def test_expression_on_a_log_scale_keeps_its_negative_values(cohort) -> None:
+    """Standardised expression is scaled as it is, not clipped and logged.
+
+    Under ``rna_scale="counts"`` the same input is refused, because ``log1p``
+    after clipping at zero would erase every below-average value.
+    """
+    data = load(cohort)
+    features = data.X.astype(float).copy()
+    rna = features[:, : data.n_genes]
+    features[:, : data.n_genes] = (rna - rna.mean(axis=0)) / (rna.std(axis=0) + 1e-9)
+    kwargs = {"n_genes": data.n_genes, "gene_names": data.gene_names, "top_k": 4}
+
+    logged = MultiOmicsTransformer(
+        rna_scale="log", active_modalities=("rna",), **kwargs
+    )
+    out = logged.fit_transform(features)
+    expected = features[:, logged.selected_idx_]
+    expected = (expected - expected.mean(axis=0)) / expected.std(axis=0)
+
+    assert np.allclose(out, expected, atol=1e-9)
+    with pytest.raises(ValueError, match="rna_scale"):
+        MultiOmicsTransformer(rna_scale="counts", **kwargs).fit(features)

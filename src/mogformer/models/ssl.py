@@ -20,14 +20,12 @@ import torch
 from torch import nn
 
 from mogformer.models.layers.decoder import DualHeadDecoder
-from mogformer.models.layers.gated_fusion import GatedFusion
+from mogformer.models.layers.gated_fusion import FUSION_TYPES, GatedFusion
 from mogformer.models.layers.global_transformer import GlobalGraphTransformer
 from mogformer.models.layers.masking import MaskedMultiModalMasker
 from mogformer.models.layers.mini_transformer import MiniTransformer
 from mogformer.models.layers.modality_lifting import ModalityLifting
-
-#: Intra-gene fusion layers selectable for pretraining.
-FUSION_TYPES: tuple[str, ...] = ("gated", "attention")
+from mogformer.models.layers.program_readout import PROGRAM_INPUTS, ProgramReadout
 
 
 class MOGFormerSSL(nn.Module):
@@ -38,6 +36,7 @@ class MOGFormerSSL(nn.Module):
 
     Attributes:
         d: Token width.
+        embedding_width: Width of the patient embedding ``c``.
         rna_only: Zero the non-expression modalities, for the single-omics rung
             of the ablation ladder.
         cnv_off: Zero copy number only.
@@ -64,6 +63,18 @@ class MOGFormerSSL(nn.Module):
         mask_modality_weights: tuple[float, float, float] = (2.0, 1.0, 1.0),
         rna_only: bool = False,
         cnv_off: bool = False,
+        global_offset: bool = True,
+        isolated_token: bool = False,
+        identity_modulation: bool = False,
+        n_summary_tokens: int = 1,
+        global_head: str = "film",
+        fusion_residual: bool = False,
+        neighbourhood_mask_share: float = 0.0,
+        omics_mask_prob: float = 0.0,
+        n_programs: int = 0,
+        program_width: int = 32,
+        program_layers: int = 2,
+        program_input: str = "final",
     ) -> None:
         """Assemble encoder, masker and decoder.
 
@@ -82,19 +93,47 @@ class MOGFormerSSL(nn.Module):
             n_universe: Gene universe size for the identity table.
             gene_ids: Universe positions of the selected genes.
             lambda_gate: Per-head learnable scaling of the distance bias.
-            fusion_type: One of :data:`FUSION_TYPES`.
+            fusion_type: One of
+                :data:`~mogformer.models.layers.gated_fusion.FUSION_TYPES`.
             mask_gene_frac: Fraction of genes hidden entirely per patient.
             mask_modality_frac: Probability of hiding one modality of a gene.
             mask_modality_weights: Relative weights over ``(rna, cnv, methy)``
                 when choosing which single modality to hide.
             rna_only: Zero copy number and methylation before encoding.
             cnv_off: Zero copy number before encoding.
+            global_offset: Let the decoder's global head add a patient-level
+                offset shared by every gene and modality.
+            isolated_token: Give genes without an interaction edge a learned
+                positional code of their own.
+            identity_modulation: Let gene identity scale and shift each value
+                token, not only sit beside it.
+            n_summary_tokens: Summary tokens ``K`` ahead of the genes; the
+                patient embedding is their concatenation, ``K * d`` wide.
+            global_head: Form of the decoder's global head, one of
+                :data:`~mogformer.models.layers.decoder.GLOBAL_HEADS`.
+            fusion_residual: Carry the unfused omics tokens past the gated
+                fusion (gated fusion only).
+            neighbourhood_mask_share: Share of whole-gene masks drawn as a gene
+                and its interaction neighbours.
+            omics_mask_prob: Probability, per patient, of hiding one whole
+                omics during pretraining.
+            n_programs: Gene programs read out by
+                :class:`~mogformer.models.layers.program_readout.ProgramReadout`;
+                0 keeps the summary-token embedding. With programs, the patient
+                embedding is the program embeddings concatenated and the
+                decoder's global head is scoped by program. The assignment is
+                installed after construction, once it is fitted.
+            program_width: Width of each program embedding.
+            program_layers: Read-out layers of the program queries.
+            program_input: Gene states the programs read, one of
+                :data:`~mogformer.models.layers.program_readout.PROGRAM_INPUTS`.
 
         Raises:
             ValueError: If ``fusion_type`` is unknown, or if
                 ``gene_id_embedding`` is False — the decoder addresses its
                 predictions by gene identity, so without those embeddings it
-                cannot say which gene a prediction is about.
+                cannot say which gene a prediction is about. Also if
+                programs are combined with a global head other than ``film``.
         """
         super().__init__()
         if fusion_type not in FUSION_TYPES:
@@ -106,6 +145,13 @@ class MOGFormerSSL(nn.Module):
                 "gene_id_embedding is required: the decoder addresses its "
                 "reconstructions by per-gene identity"
             )
+        if program_input not in PROGRAM_INPUTS:
+            raise ValueError(
+                f"unknown program_input {program_input!r}; "
+                f"available: {list(PROGRAM_INPUTS)}"
+            )
+        if fusion_residual and fusion_type != "gated":
+            raise ValueError("fusion_residual is defined for gated fusion only")
 
         self.d = d
         self.rna_only = rna_only
@@ -116,6 +162,7 @@ class MOGFormerSSL(nn.Module):
             gene_id_embedding=gene_id_embedding,
             n_universe=n_universe,
             gene_ids=gene_ids,
+            identity_modulation=identity_modulation,
         )
 
         # The masker owns all masking during pretraining, so the fusion layer's
@@ -128,6 +175,7 @@ class MOGFormerSSL(nn.Module):
                 rna_dropout_prob=0.0,
                 cnv_dropout_prob=0.0,
                 meth_dropout_prob=0.0,
+                residual=fusion_residual,
             )
         else:
             self.mini_transformer = MiniTransformer(
@@ -149,11 +197,39 @@ class MOGFormerSSL(nn.Module):
             dropout=dropout,
             lambda_gate=lambda_gate,
             use_grn=use_grn,
+            isolated_token=isolated_token,
+            n_summary_tokens=n_summary_tokens,
         )
+        self.n_summary_tokens = n_summary_tokens
         self.masker = MaskedMultiModalMasker(
-            mask_gene_frac, mask_modality_frac, mask_modality_weights
+            mask_gene_frac,
+            mask_modality_frac,
+            mask_modality_weights,
+            neighbourhood_share=neighbourhood_mask_share,
+            omics_mask_prob=omics_mask_prob,
         )
-        self.decoder = DualHeadDecoder(d=d)
+        self.n_programs = n_programs
+        self.program_input = program_input
+        self.program_readout: ProgramReadout | None = None
+        if n_programs > 0:
+            self.program_readout = ProgramReadout(
+                d=d,
+                n_genes=len(gene_ids) if gene_ids is not None else n_universe,
+                n_programs=n_programs,
+                width=program_width,
+                num_layers=program_layers,
+                dropout=dropout,
+            )
+        self.embedding_width = (
+            n_programs * program_width if n_programs > 0 else n_summary_tokens * d
+        )
+        self.decoder = DualHeadDecoder(
+            d=d,
+            global_offset=global_offset,
+            global_head=global_head,
+            n_summary_tokens=n_summary_tokens,
+            program_width=program_width if n_programs > 0 else None,
+        )
 
     def forward(
         self,
@@ -184,9 +260,12 @@ class MOGFormerSSL(nn.Module):
             structural_bias: When False, attention ignores the graph.
 
         Returns:
-            With ``mask`` False: ``c`` (summary token), ``H_final`` (full
-            sequence) and ``gate`` (fusion interpretability).
-            With ``mask`` True: additionally ``xhat_g`` and ``xhat_l``
+            With ``mask`` False: ``c`` (the patient embedding: summary tokens
+            concatenated, ``(batch, K * d)``, or with gene programs the program
+            embeddings concatenated), ``H_final`` (full sequence, summary tokens
+            first), ``H_genes`` (the genes' final states) and ``gate`` (fusion
+            interpretability).
+            With ``mask`` True: ``c``, ``gate``, ``xhat_g`` and ``xhat_l``
             (global-head and local-head reconstructions, shape
             ``(batch, n_genes, 3)``), ``mask_bool`` and ``targets``.
 
@@ -223,21 +302,43 @@ class MOGFormerSSL(nn.Module):
             fused, graph_pe, spd_matrix, grn_matrix, structural_bias=structural_bias
         )
 
-        if hidden_last.shape[1] != fused.shape[1] + 1:
+        k = self.n_summary_tokens
+        if hidden_last.shape[1] != fused.shape[1] + k:
             raise RuntimeError(
-                f"expected one summary token ahead of {fused.shape[1]} genes, "
+                f"expected {k} summary token(s) ahead of {fused.shape[1]} genes, "
                 f"got a sequence of {hidden_last.shape[1]}"
             )
 
+        programs = None
+        if self.program_readout is not None:
+            programs = self.program_readout(
+                fused if self.program_input == "fused" else hidden_last[:, k:, :]
+            )
+            summary = programs.reshape(programs.shape[0], -1)
+
         if not mask:
-            return {"c": summary, "H_final": hidden_last, "gate": gate}
+            return {
+                "c": summary,
+                "H_final": hidden_last,
+                "H_genes": hidden_last[:, k:, :],
+                "gate": gate,
+            }
 
         # The decoder must address predictions with the encoder's own
         # embeddings, not copies of its own.
         gene_embedding = self.lifter.get_gene_embedding()
         modality_embedding = self.lifter.get_modality_embeddings()
         global_prediction, local_prediction = self.decoder(
-            summary, hidden_last, gene_embedding, modality_embedding
+            summary,
+            hidden_last,
+            gene_embedding,
+            modality_embedding,
+            programs=programs,
+            assignment=(
+                None
+                if self.program_readout is None
+                else self.program_readout.assignment
+            ),
         )
         return {
             "xhat_g": global_prediction,

@@ -115,6 +115,7 @@ def fit_cox(
     covariates: Sequence[str] = (),
     model_label: str = "",
     estimand: str = "",
+    strata: Sequence[str] = (),
 ) -> CoxResult:
     """Fit one Cox proportional-hazards rung.
 
@@ -127,6 +128,8 @@ def fit_cox(
         covariates: Additional adjustment covariates.
         model_label: Description recorded on the result.
         estimand: What this rung estimates.
+        strata: Columns that stratify the baseline hazard (a separate
+            baseline per level) rather than enter as covariates.
 
     Returns:
         The fitted rung.
@@ -143,7 +146,7 @@ def fit_cox(
             "survival analysis needs lifelines; install the 'analysis' extra"
         ) from error
 
-    columns = [duration_col, event_col, predictor, *covariates]
+    columns = [duration_col, event_col, predictor, *covariates, *strata]
     missing = [name for name in columns if name not in frame.columns]
     if missing:
         raise ValueError(f"frame is missing column(s): {missing}")
@@ -156,7 +159,12 @@ def fit_cox(
     check_events_per_variable(n_events, len(covariates) + 1)
 
     fitter = CoxPHFitter()
-    fitter.fit(complete, duration_col=duration_col, event_col=event_col)
+    fitter.fit(
+        complete,
+        duration_col=duration_col,
+        event_col=event_col,
+        strata=list(strata) or None,
+    )
     summary = fitter.summary.loc[predictor]
 
     return CoxResult(
@@ -413,23 +421,24 @@ def describe_followup(
 def logrank_p_value(
     frame: pd.DataFrame, duration_col: str, event_col: str, group_col: str
 ) -> float:
-    """Return the log-rank p-value comparing two groups.
+    """Return the log-rank p-value comparing two or more groups.
 
     Args:
         frame: One row per patient.
         duration_col: Column holding follow-up time.
         event_col: Column holding the event indicator.
-        group_col: Binary group column.
+        group_col: Group column.
 
     Returns:
-        The p-value.
+        The p-value: the two-sample test for two groups, the multi-group test
+        otherwise.
 
     Raises:
         ImportError: If lifelines is not installed.
-        ValueError: If the group column does not hold exactly two values.
+        ValueError: If the group column holds fewer than two values.
     """
     try:
-        from lifelines.statistics import logrank_test
+        from lifelines.statistics import logrank_test, multivariate_logrank_test
     except ImportError as error:  # pragma: no cover - optional dependency
         raise ImportError(
             "survival analysis needs lifelines; install the 'analysis' extra"
@@ -437,8 +446,13 @@ def logrank_p_value(
 
     complete = frame[[duration_col, event_col, group_col]].dropna()
     groups = sorted(complete[group_col].unique())
-    if len(groups) != 2:
-        raise ValueError(f"{group_col!r} must hold exactly two groups, found {groups}")
+    if len(groups) < 2:
+        raise ValueError(f"{group_col!r} must hold two or more groups, found {groups}")
+    if len(groups) > 2:
+        result = multivariate_logrank_test(
+            complete[duration_col], complete[group_col], complete[event_col]
+        )
+        return float(result.p_value)
 
     first = complete[complete[group_col] == groups[0]]
     second = complete[complete[group_col] == groups[1]]
@@ -449,3 +463,55 @@ def logrank_p_value(
         second[event_col],
     )
     return float(result.p_value)
+
+
+def uno_concordance(
+    time: np.ndarray,
+    event: np.ndarray,
+    risk: np.ndarray,
+    tau: float | None = None,
+) -> float:
+    """Uno's concordance index, weighted for censoring.
+
+    Harrell's index depends on the censoring distribution; Uno's weights each
+    comparable pair by the inverse squared probability of remaining uncensored
+    at the earlier time, estimated by Kaplan–Meier of the censoring times, which
+    makes it consistent for a fixed horizon (Uno et al. 2011).
+
+    Args:
+        time: Follow-up time per patient.
+        event: 1 for an event, 0 for censoring.
+        risk: Predicted risk per patient; higher means earlier events.
+        tau: Horizon; pairs whose earlier time is beyond it are ignored.
+            Defaults to the largest event time.
+
+    Returns:
+        The concordance, with ties in risk counted as one half.
+    """
+    time = np.asarray(time, dtype=float)
+    event = np.asarray(event, dtype=bool)
+    risk = np.asarray(risk, dtype=float)
+    tau = float(time[event].max()) if tau is None else tau
+
+    # Kaplan–Meier of censoring, evaluated just before each time.
+    surviving = 1.0
+    at_risk = len(time)
+    survival_before = {}
+    for t in np.unique(time):
+        survival_before[t] = surviving
+        here = time == t
+        censored_here = int((here & ~event).sum())
+        if at_risk > 0:
+            surviving *= 1.0 - censored_here / at_risk
+        at_risk -= int(here.sum())
+    censoring = np.array([survival_before[t] for t in time])
+
+    numerator = denominator = 0.0
+    for i in np.flatnonzero(event & (time < tau)):
+        weight = 1.0 / max(censoring[i], 1e-12) ** 2
+        later = time > time[i]
+        denominator += weight * later.sum()
+        numerator += weight * (
+            (risk[i] > risk[later]).sum() + 0.5 * (risk[i] == risk[later]).sum()
+        )
+    return numerator / denominator if denominator else float("nan")

@@ -1,0 +1,82 @@
+# METABRIC, integrative cluster (11 classes); MOGFormer with gated intra-gene fusion; features:
+# expression only.
+#
+# Architecture and training copied from
+# configs/transformer_variants/gated_fusion_5class.yaml. Methylation is
+# read as M-values, derived from METABRIC's beta values with the transform
+# used for TCGA. Same partition as the classical runs on this target, so
+# scores are paired with them.
+# Training differs from the gated-fusion runs on this target in its stopping
+# rule only: early stopping cannot trigger before epoch 100, and epochs are
+# compared on inner macro-F1 averaged over 5 epochs. Training sits on a
+# plateau for about 40 epochs; with the original rule a noisy early spike
+# could be kept, and a fold never learned.
+name: metabric_intclust_rna_only_gated_fusion_smoothed_stopping
+results_dir: results/runs/transformer_variants
+
+data:
+  raw_dir: data
+  rna_file: METABRIC/clean/data_rna_common.csv
+  cnv_file: METABRIC/clean/data_cnv_common.csv
+  methy_file: METABRIC/clean/gene_promoter_methylation_common_M.csv
+  clin_file: METABRIC/clean/data_clinical.csv
+  label_col: INTCLUST
+  exclude_classes: []
+  curated_genes_file: data/raw/CGenes.txt
+
+folds:
+  path: data/bundle/metabric/intclust/folds.json
+  n_splits: 5
+  n_repeats: 5
+  seed: 42
+
+preprocess:
+  top_k: 250
+  active_modalities: [rna]
+  mad_on_log_rna: false
+  impute: true
+  # METABRIC expression is distributed as microarray z-scores, so it is
+  # standardised as it is rather than log-transformed like counts.
+  rna_scale: log
+
+graph:
+  ppi_file: data/clean/9606.protein.links.v12.0.txt
+  alias_file: data/clean/9606.protein.aliases.v12.0.txt
+  grn_file: data/clean/collectri_signed_edges.tsv
+  string_threshold: 400
+  max_distance: 10
+  pe_dim: 32
+  pe_method: rwpe
+  use_grn: false
+
+model:
+  d: 128
+  mini_heads: 4
+  global_heads: 8
+  global_layers: 1
+  dropout: 0.2
+  rna_dropout_prob: 0.4
+  cnv_dropout_prob: 0.2
+  meth_dropout_prob: 0.2
+  attention_bias_mode: inside
+  numerical_tokenizer: mlp
+  # A dropped modality is replaced by a learned token rather than zeros, so
+  # "absent" is distinguishable from "measured at the block mean".
+  unimodal_dropout_fill: mask_token
+  gene_id_embedding: true
+  lambda_gate: false
+  fusion_type: gated
+
+train:
+  lr: 1.0e-4
+  min_lr: 1.0e-6
+  weight_decay: 1.0e-4
+  max_epochs: 300
+  patience: 40
+  batch_size: 32
+  inner_val_frac: 0.2
+  focal_gamma: 2.0
+  min_epochs: 100
+  selection_window: 5
+  log_every: 10
+  seed: 42

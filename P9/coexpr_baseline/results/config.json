@@ -1,8 +1,0 @@
-{
-  "cohort": "all",
-  "alpha": 151.99110829529332,
-  "predictor_sets": [
-    "rna_others"
-  ],
-  "n_splits": 5
-}

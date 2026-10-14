@@ -1,7 +1,7 @@
 """End-to-end smoke test over a synthetic cohort.
 
-This is the test that answers "does the pipeline run outside Kaggle?", which is
-the first thing anyone cloning the repository will try. It walks the whole path
+This is the test that answers "does the pipeline run from a fresh clone?", which
+is the first thing anyone cloning the repository will try. It walks the whole path
 — write matrices, load and align them, build folds, refit preprocessing inside a
 fold, build the fold-local graph, train the transformer for a couple of epochs,
 score the held-out patients — on a cohort small enough to finish in seconds on
@@ -459,12 +459,19 @@ def test_every_figure_renders(tmp_path) -> None:
         screen_covariates,
     )
     from mogformer.analysis.plots import (
+        plot_attribution_beeswarm,
+        plot_block_prognosis,
         plot_confound_screen,
         plot_consensus_heatmap,
+        plot_hazard_forest,
+        plot_kaplan_meier,
+        plot_omics_reliance,
+        plot_partition_crosstab,
         plot_representation_ladder,
         plot_response_curves,
         plot_sign_concordance,
         plot_stability_by_k,
+        plot_strata_composition,
         plot_trans_versus_coexpression,
     )
     from mogformer.analysis.probe_trans import sign_permutation_test
@@ -525,7 +532,15 @@ def test_every_figure_renders(tmp_path) -> None:
     blobs = np.vstack([rng.normal(-4, 0.3, (25, 3)), rng.normal(4, 0.3, (25, 3))])
     results = run_consensus_clustering(blobs, (2, 3), n_resample=15, seed=0)
     written.append(plot_consensus_heatmap(results[2], tmp_path))
-    written.append(plot_stability_by_k(results, tmp_path))
+    stability = pd.DataFrame(
+        [
+            {"representation": "encoder", "k": k, "pac": r.pac, "bootstrap_ari": 0.9}
+            for k, r in results.items()
+        ]
+    )
+    written.append(
+        plot_stability_by_k(stability, tmp_path, bar={"pac": 0.1, "bootstrap_ari": 0.8})
+    )
 
     written.append(
         plot_representation_ladder(
@@ -544,6 +559,57 @@ def test_every_figure_renders(tmp_path) -> None:
         roles={"burden": "biology", "site": "technical"},
     )
     written.append(plot_confound_screen(screen, tmp_path))
+    strata = pd.DataFrame(
+        {
+            "t": rng.exponential(50, 60),
+            "e": rng.integers(0, 2, 60),
+            "stratum": np.repeat([0, 1, 2], 20),
+        }
+    )
+    written.append(
+        plot_kaplan_meier(strata, {"Relapse-free": ("t", "e")}, "stratum", tmp_path)
+    )
+    written.append(
+        plot_hazard_forest(
+            pd.DataFrame(
+                {
+                    "rung": ["unadjusted", "unadjusted", "+ age", "+ age"],
+                    "stratum": [1, 2, 1, 2],
+                    "reference": 0,
+                    "hazard_ratio": [2.0, 1.5, 1.8, 1.4],
+                    "ci_low": [1.5, 1.1, 1.3, 1.0],
+                    "ci_high": [2.7, 2.0, 2.4, 1.9],
+                }
+            ),
+            tmp_path,
+        )
+    )
+    crosstab = pd.crosstab(
+        pd.Series([0, 0, 1, 1], name="stratum"),
+        pd.Series(["LumA", "LumB"] * 2, name="PAM50"),
+    )
+    written.append(plot_strata_composition({"population": crosstab}, tmp_path))
+    written.append(plot_partition_crosstab(crosstab, tmp_path))
+    attributions = rng.normal(size=(30, 4, 3))
+    written.append(
+        plot_attribution_beeswarm(
+            attributions, rng.normal(size=(30, 4, 3)), list("ABCD"), tmp_path, top=5
+        )
+    )
+    gates = pd.DataFrame(
+        {"rna": [0.5, 0.4], "cnv": [0.2, 0.3], "methy": [0.3, 0.3]}, index=[0, "all"]
+    )
+    shares = {"risk": {"rna": 0.6, "cnv": 0.2, "methy": 0.2}}
+    written.append(plot_omics_reliance(gates, shares, tmp_path))
+    programs = pd.DataFrame(
+        {
+            "program": [0, 1],
+            "relapse_c_index": [0.6, 0.52],
+            "relapse_c_index_sd": [0.02, 0.03],
+            "top_attended_genes": ["MKI67, AURKA, TOP2A", "ESR1, PGR, GATA3"],
+        }
+    )
+    written.append(plot_block_prognosis(programs, tmp_path))
 
     curves = pd.DataFrame(
         [
@@ -576,3 +642,213 @@ def test_every_figure_renders(tmp_path) -> None:
         assert path.exists(), path
         assert path.stat().st_size > 0
         assert path.with_suffix(".svg").exists()
+
+
+def test_transformer_is_scored_by_the_same_harness_as_the_baselines(
+    cohort, tmp_path
+) -> None:
+    """The transformer enters as a registered model, not a parallel pipeline.
+
+    This is the fix for the defect that made every earlier comparison
+    unpairable. Registering it means it takes the same folds, the same
+    fold-local preprocessing, the same metric functions and the same
+    aggregation as every baseline, so the resulting vectors are aligned
+    element by element and a paired test over them is meaningful.
+    """
+    from mogformer.evaluation.runner import load_per_fold_scores, run_cross_validation
+
+    data = load(cohort)
+    folds = make_folds(data.y, data.patient_ids, n_splits=5, n_repeats=1, seed=42)
+    folds_path = tmp_path / "folds.json"
+    save_folds(folds, data.patient_ids, folds_path)
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "name: transformer_smoke\n"
+        f"results_dir: {tmp_path.as_posix()}/out\n"
+        "data:\n"
+        f"  raw_dir: {cohort.as_posix()}\n"
+        "  rna_file: rna.csv\n"
+        "  cnv_file: cnv.csv\n"
+        "  methy_file: methy.csv\n"
+        "  clin_file: clinical.csv\n"
+        "  label_col: SUBTYPE\n"
+        "folds:\n"
+        f"  path: {folds_path.as_posix()}\n"
+        "  n_splits: 5\n"
+        "  n_repeats: 1\n"
+        "  max_folds: 2\n"
+        "preprocess:\n"
+        "  top_k: 6\n"
+        "graph:\n"
+        f"  ppi_file: {(cohort / 'links.txt').as_posix()}\n"
+        f"  alias_file: {(cohort / 'aliases.tsv').as_posix()}\n"
+        "  max_distance: 3\n"
+        "  pe_dim: 4\n"
+        "model:\n"
+        "  d: 16\n"
+        "  mini_heads: 2\n"
+        "  global_heads: 2\n"
+        "train:\n"
+        "  max_epochs: 2\n"
+        "  patience: 2\n"
+        "  batch_size: 8\n",
+        encoding="utf-8",
+    )
+
+    config = load_config(config_path)
+    models = ["B0b_dummy_mostfreq", "M_mogformer"]
+    per_fold = run_cross_validation(config, models=models, device="cpu")
+
+    assert set(per_fold["model"].unique()) == set(models)
+
+    scores = load_per_fold_scores(config.output_dir / "metrics_per_fold.csv")
+    # Both vectors index the same two folds, in the same order.
+    assert {len(vector) for vector in scores.values()} == {2}
+    assert set(scores) == set(models)
+
+
+def test_the_transformer_builds_its_graph_from_the_genes_the_fold_selected(
+    cohort,
+) -> None:
+    """Selection happens inside the pipeline; the graph must follow it there.
+
+    A plain pipeline cannot express this: the classifier is constructed before
+    anything is fit, so it cannot know which genes the preprocessing step will
+    keep. If the wiring were missing, the transformer would build its graph
+    from whatever gene list it was constructed with — in practice the empty
+    one — rather than from the fold's own selection.
+    """
+    from mogformer.config import GraphConfig, ModelConfig, TrainConfig
+    from mogformer.evaluation.registry import HarnessContext, build_registry
+
+    data = load(cohort)
+    string_cache = StringGraphCache(
+        str(cohort / "links.txt"), str(cohort / "aliases.tsv"), data.gene_names, 400
+    )
+    context = HarnessContext(
+        n_genes=data.n_genes,
+        gene_names=data.gene_names,
+        curated_genes=[],
+        pam50_genes=[],
+        n_classes=len(data.label_map),
+        top_k=5,
+        string_cache=string_cache,
+        graph=GraphConfig(max_distance=3, pe_dim=4),
+        model=ModelConfig(d=16, mini_heads=2, global_heads=2),
+        train=TrainConfig(max_epochs=1, patience=1, batch_size=8),
+        device="cpu",
+    )
+
+    registry = build_registry(context)
+    assert "M_mogformer" in registry
+
+    pipeline = registry["M_mogformer"].build(context)
+    pipeline.fit(data.X, data.y)
+
+    selected = pipeline.named_steps["prep"].get_selected_gene_names()
+    assert list(pipeline.named_steps["clf"].selected_genes) == list(selected)
+    # The graph tensors were sized by the fold's selection, not the universe.
+    assert pipeline.named_steps["clf"].spd_.shape == (len(selected), len(selected))
+    assert len(selected) < data.n_genes
+
+
+def test_a_bundled_cohort_scores_identically_to_the_raw_one(cohort, tmp_path) -> None:
+    """Reading the cached cohort must not change a single score.
+
+    Experiments read a bundle rather than the raw matrices. That is only
+    acceptable if the bundle is the same cohort: same patients, same order,
+    same folds, same numbers out of the harness.
+    """
+    from mogformer.data.omics import load_omics_bundle, save_omics_bundle
+    from mogformer.evaluation.runner import run_cross_validation
+
+    data = load(cohort)
+    folds = make_folds(data.y, data.patient_ids, n_splits=5, n_repeats=1, seed=42)
+    folds_path = tmp_path / "folds.json"
+    save_folds(folds, data.patient_ids, folds_path)
+
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        "name: raw_run\n"
+        f"results_dir: {tmp_path.as_posix()}/out\n"
+        "data:\n"
+        f"  raw_dir: {cohort.as_posix()}\n"
+        "  rna_file: rna.csv\n"
+        "  cnv_file: cnv.csv\n"
+        "  methy_file: methy.csv\n"
+        "  clin_file: clinical.csv\n"
+        "  label_col: SUBTYPE\n"
+        "folds:\n"
+        f"  path: {folds_path.as_posix()}\n"
+        "  n_splits: 5\n"
+        "  n_repeats: 1\n"
+        "preprocess:\n"
+        "  top_k: 6\n",
+        encoding="utf-8",
+    )
+    config = load_config(config_path)
+    models = ["B0b_dummy_mostfreq", "B4_random_forest"]
+
+    from_raw = run_cross_validation(config, models=models)
+
+    bundle = save_omics_bundle(data, tmp_path / "cohort.npz")
+    config.name = "bundled_run"
+    from_bundle = run_cross_validation(
+        config, models=models, data=load_omics_bundle(bundle)
+    )
+
+    # The run name is deliberately different — that column exists so two
+    # runs' outputs can be told apart. Everything that is a *score* must
+    # match exactly.
+    assert set(from_raw["run"]) == {"raw_run"}
+    assert set(from_bundle["run"]) == {"bundled_run"}
+
+    def scores(frame):
+        return (
+            frame.drop(columns=["run"])
+            .sort_values(["model", "repeat", "fold", "metric"])
+            .reset_index(drop=True)
+        )
+
+    pd.testing.assert_frame_equal(scores(from_raw), scores(from_bundle))
+
+
+def test_early_stopping_waits_for_the_minimum_epochs(cohort) -> None:
+    """With patience 1, training still runs past ``min_epochs`` and records why.
+
+    A plateau at the start of training is how a fold ended with a model that
+    never learned; the minimum keeps stopping from triggering inside it.
+    """
+    data = load(cohort)
+    spec = make_folds(data.y, data.patient_ids, n_splits=5, n_repeats=1, seed=42)[0]
+    transformer = MultiOmicsTransformer(
+        n_genes=data.n_genes, gene_names=data.gene_names, top_k=6, curated_genes=[]
+    )
+    features = transformer.fit_transform(data.X[spec.train_idx])
+    string_cache = StringGraphCache(
+        str(cohort / "links.txt"), str(cohort / "aliases.tsv"), data.gene_names
+    )
+    estimator = MOGFormerClassifier(
+        selected_genes=transformer.get_selected_gene_names(),
+        string_cache=string_cache,
+        num_classes=len(data.label_map),
+        d=16,
+        pe_dim=4,
+        mini_heads=2,
+        global_heads=2,
+        max_distance=3,
+        max_epochs=12,
+        patience=1,
+        min_epochs=6,
+        selection_window=3,
+        batch_size=8,
+        device="cpu",
+    ).fit(features, data.y[spec.train_idx])
+
+    assert len(estimator.history_) > 6
+    assert 0 <= estimator.best_epoch_ < len(estimator.history_)
+    window = [score for _, _, score in estimator.history_][
+        max(0, estimator.best_epoch_ - 2) : estimator.best_epoch_ + 1
+    ]
+    assert estimator.best_inner_score_ == pytest.approx(np.mean(window))

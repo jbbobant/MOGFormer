@@ -1,9 +1,9 @@
-"""Command-line entry points, one per phase of the project.
+"""Command-line entry points, one per stage of the pipeline.
 
 Every subcommand takes a configuration file and writes its resolved settings
 beside its outputs, so a result can always be traced back to what produced it.
 
-Run ``mogformer --help`` for the available phases.
+Run ``mogformer --help`` for the available subcommands.
 """
 
 from __future__ import annotations
@@ -135,7 +135,7 @@ def build_parser() -> argparse.ArgumentParser:
     """Construct the top-level argument parser.
 
     Returns:
-        A parser with one subcommand per phase.
+        A parser with one subcommand per pipeline stage.
     """
     parser = argparse.ArgumentParser(
         prog="mogformer",

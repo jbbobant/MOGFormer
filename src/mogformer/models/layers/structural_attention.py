@@ -157,45 +157,99 @@ class StructuralGraphAttention(nn.Module):
             Updated token states, shape ``(batch, seq_len, d_model)``.
         """
         batch, seq_len, _ = h.shape
+        query, key, value = self._project(h)
 
-        query = (
-            self.q_proj(h)
-            .view(batch, seq_len, self.num_heads, self.d_head)
-            .transpose(1, 2)
-        )
-        key = (
-            self.k_proj(h)
-            .view(batch, seq_len, self.num_heads, self.d_head)
-            .transpose(1, 2)
-        )
-        value = (
-            self.v_proj(h)
-            .view(batch, seq_len, self.num_heads, self.d_head)
-            .transpose(1, 2)
-        )
-
-        scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(self.d_head)
-
-        if not structural_bias:
-            attention = F.softmax(scores, dim=-1)
+        if self.mode == "inside" or not structural_bias:
+            # The fused kernel never stores the (batch, heads, seq, seq) score
+            # tensor, which at a few thousand genes does not fit in memory.
+            # The bias is passed un-expanded over the batch so that its
+            # gradient is reduced inside the kernel rather than materialised.
+            mask = (
+                self._inside_bias(spd_matrix, grn_matrix) if structural_bias else None
+            )
+            out = F.scaled_dot_product_attention(
+                query,
+                key,
+                value,
+                attn_mask=mask,
+                dropout_p=self.attn_drop.p if self.training else 0.0,
+            )
         else:
-            bias = self._structural_bias(spd_matrix, grn_matrix)
-            bias = bias.unsqueeze(0).expand(batch, -1, -1, -1)
-
-            if self.mode == "inside":
-                if self.lambda_gate:
-                    scale = F.softplus(self.lambda_raw).view(1, self.num_heads, 1, 1)
-                    bias = scale * bias
-                attention = F.softmax(scores + bias, dim=-1)
-            else:
-                # Two separately normalised distributions, averaged so the rows
-                # still sum to one.
-                attention = (F.softmax(scores, dim=-1) + F.softmax(bias, dim=-1)) / 2.0
-
-        attention = self.attn_drop(attention)
-        out = torch.matmul(attention, value)
+            attention = self.attn_drop(
+                self._weights(query, key, spd_matrix, grn_matrix, structural_bias)
+            )
+            out = torch.matmul(attention, value)
         out = out.transpose(1, 2).contiguous().view(batch, seq_len, -1)
         return self.out_proj(out)
+
+    def _project(
+        self, h: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Return queries, keys and values, shape ``(batch, heads, seq, d_head)``."""
+        batch, seq_len, _ = h.shape
+        return tuple(
+            projection(h)
+            .view(batch, seq_len, self.num_heads, self.d_head)
+            .transpose(1, 2)
+            for projection in (self.q_proj, self.k_proj, self.v_proj)
+        )
+
+    def _inside_bias(
+        self, spd_matrix: torch.Tensor, grn_matrix: torch.Tensor | None
+    ) -> torch.Tensor:
+        """Return the additive score bias of ``inside`` mode, ``(1, heads, L, L)``."""
+        bias = self._structural_bias(spd_matrix, grn_matrix).unsqueeze(0)
+        if self.lambda_gate:
+            bias = F.softplus(self.lambda_raw).view(1, self.num_heads, 1, 1) * bias
+        # The memory-efficient kernel needs a unit-stride last dimension; the
+        # bias comes out of a permuted embedding lookup and would otherwise
+        # send attention down the path that stores every score.
+        return bias.contiguous()
+
+    def _weights(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        spd_matrix: torch.Tensor,
+        grn_matrix: torch.Tensor | None,
+        structural_bias: bool,
+    ) -> torch.Tensor:
+        """Compute attention probabilities explicitly, before dropout."""
+        scores = torch.matmul(query, key.transpose(-2, -1)) / math.sqrt(self.d_head)
+        if not structural_bias:
+            return F.softmax(scores, dim=-1)
+        if self.mode == "inside":
+            return F.softmax(scores + self._inside_bias(spd_matrix, grn_matrix), dim=-1)
+        # Two separately normalised distributions, averaged so the rows still
+        # sum to one.
+        bias = self._structural_bias(spd_matrix, grn_matrix).unsqueeze(0)
+        return (F.softmax(scores, dim=-1) + F.softmax(bias, dim=-1)) / 2.0
+
+    @torch.no_grad()
+    def attention_weights(
+        self,
+        h: torch.Tensor,
+        spd_matrix: torch.Tensor,
+        grn_matrix: torch.Tensor | None = None,
+        structural_bias: bool = True,
+    ) -> torch.Tensor:
+        """Recompute the attention probabilities for interpretation.
+
+        The forward pass never stores them; this materialises them for the
+        few patients an interpretation needs, without dropout.
+
+        Args:
+            h: Token states (already layer-normalised, as the block feeds the
+                layer), shape ``(batch, seq_len, d_model)``.
+            spd_matrix: Integer distances, shape ``(seq_len, seq_len)``.
+            grn_matrix: Signed regulatory adjacency of the same shape, or None.
+            structural_bias: Whether the graph biases are applied.
+
+        Returns:
+            Probabilities of shape ``(batch, heads, seq_len, seq_len)``.
+        """
+        query, key, _ = self._project(h)
+        return self._weights(query, key, spd_matrix, grn_matrix, structural_bias)
 
 
 class StructuralAttentionBlock(nn.Module):

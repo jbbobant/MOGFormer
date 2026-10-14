@@ -1,0 +1,79 @@
+# TCGA-BRCA (`--bundle data/bundle/tcga`): as tcga_programs_coexpression_k16.yaml (16 co-variation
+# programs, 32-d blocks, program-scoped global head), but the program queries read each gene's
+# fused token before the inter-gene transformer, so a block sees only its own genes' measurements.
+data:
+  cohort_file: cohort_ssl.npz
+  cohort_rule: every TCGA-BRCA patient with gene-level absolute copy number, RNA-seq expression
+    and promoter methylation (748); no label required, so 99 patients outside the 949-patient
+    supervised cohort are included
+  curated_genes_file: curated_genes.txt
+  exclude_classes: []
+  label_col: SUBTYPE
+  ploidy_file: ploidy.csv
+  raw_dir: data/bundle/tcga
+graph:
+  edges_file: string_edges_experimental_database.tsv
+  grn_file: collectri_signed_edges.tsv
+  max_distance: 4
+  pe_dim: 32
+  pe_method: rwpe
+  string_threshold: 400
+  use_grn: true
+  weighted_pe: true
+model:
+  attention_bias_mode: inside
+  d: 128
+  dropout: 0.2
+  fusion_residual: true
+  fusion_type: gated
+  global_heads: 8
+  global_layers: 3
+  global_offset: false
+  identity_modulation: true
+  isolated_token: true
+  lambda_gate: true
+  mask_gene_frac: 0.35
+  mask_modality_frac: 0.15
+  mask_modality_weights:
+  - 2.0
+  - 1.0
+  - 1.0
+  mini_heads: 4
+  neighbourhood_mask_share: 0.5
+  omics_mask_prob: 0.2
+  program_source: coexpression
+  n_programs: 16
+  program_width: 32
+  program_layers: 2
+  program_input: fused
+name: tcga_programs_fused_k16
+preprocess:
+  active_modalities:
+  - rna
+  - cnv
+  - methy
+  clip_z: 5.0
+  cnv_representation: ploidy_relative
+  impute: true
+  mad_on_log_rna: true
+  rna_scale: counts
+  top_k: 1000
+results_dir: results/experiments/ssl_pretraining
+train:
+  batch_size: 32
+  gate_lr_multiplier: 10.0
+  heldout_frac: 0.1
+  log_every: 10
+  lr: 0.0001
+  lr_schedule: cosine
+  max_epochs: 600
+  min_lr: 1.0e-06
+  monitor_frac: 0.12
+  n_readout_masks: 10
+  patience: 60
+  per_modality_loss: true
+  seed: 42
+  split_seed: 42
+  warmup_epochs: 20
+  weight_decay: 0.0001
+  lambda_global: 0.5

@@ -14,6 +14,14 @@ Masking for self-supervised pretraining is applied here, at the value-token
 level: a masked token becomes ``mask_k + modality_k + gene_i``, so the model
 still knows *which* measurement of *which* gene it is being asked to
 reconstruct, and only the value itself is hidden.
+
+Gene identity can also modulate the value token instead of only sitting beside
+it (``identity_modulation``): ``z = (1 + gamma_i) * phi(x) + beta_i + e_m + g_i``
+with ``(gamma_i, beta_i)`` a linear function of the gene's identity, per modality. Added
+identity can say which gene a value belongs to, but not that a two-sigma
+change means something different for one gene than for another; the
+modulation can. Its projections start at zero, so training starts from the
+purely additive model.
 """
 
 from __future__ import annotations
@@ -162,6 +170,7 @@ class ModalityLifting(nn.Module):
         mask_token_std: float = 0.10,
         pretrained_gene_emb: torch.Tensor | None = None,
         pretrained_emb_adapter_rank: int = 0,
+        identity_modulation: bool = False,
     ) -> None:
         """Build the tokenizers, embeddings and mask tokens.
 
@@ -184,11 +193,14 @@ class ModalityLifting(nn.Module):
                 shape ``(n_selected, d_embedding)``. Takes precedence over the
                 learnable identity table.
             pretrained_emb_adapter_rank: Adapter rank for the pretrained path.
+            identity_modulation: Let gene identity scale and shift each value
+                token (zero-initialised, so it starts as the additive model).
 
         Raises:
-            ValueError: If ``numerical_tokenizer`` is unknown, or if identity
+            ValueError: If ``numerical_tokenizer`` is unknown, if identity
                 embeddings are requested without either a pretrained matrix or
-                both ``n_universe`` and ``gene_ids``.
+                both ``n_universe`` and ``gene_ids``, or if modulation is asked
+                for without identity embeddings.
         """
         super().__init__()
         if numerical_tokenizer not in NUMERICAL_TOKENIZERS:
@@ -242,6 +254,13 @@ class ModalityLifting(nn.Module):
                 )
                 self._gene_id_std = gene_id_std
 
+        if identity_modulation and not gene_id_embedding:
+            raise ValueError("identity_modulation needs gene_id_embedding")
+        self.identity_modulation = identity_modulation
+        if identity_modulation:
+            # One projection per modality, in modality order, to (gamma, beta).
+            self.identity_film = nn.ModuleList(nn.Linear(d, 2 * d) for _ in range(3))
+
         self._init_weights()
 
     @staticmethod
@@ -269,6 +288,12 @@ class ModalityLifting(nn.Module):
 
         if self.gene_id_embedding and hasattr(self, "gene_emb"):
             nn.init.normal_(self.gene_emb.weight, mean=0.0, std=self._gene_id_std)
+
+        if getattr(self, "identity_modulation", False):
+            for projection in self.identity_film:
+                linear = cast(nn.Linear, projection)
+                nn.init.zeros_(linear.weight)
+                nn.init.zeros_(linear.bias)
 
     def get_gene_embedding(self) -> torch.Tensor | None:
         """Return the per-gene identity embeddings currently in use.
@@ -338,17 +363,22 @@ class ModalityLifting(nn.Module):
                 value_methy,
             )
 
-        z_rna = value_rna + self.emb_rna
-        z_cnv = value_cnv + self.emb_cnv
-        z_methy = value_methy + self.emb_methy
+        identity = self.get_gene_embedding() if self.gene_id_embedding else None
+        if identity is not None and identity.dim() == 2:
+            identity = identity.unsqueeze(0)
 
-        if self.gene_id_embedding:
-            identity = self.get_gene_embedding()
-            if identity is not None:
-                if identity.dim() == 2:
-                    identity = identity.unsqueeze(0)
-                z_rna = z_rna + identity
-                z_cnv = z_cnv + identity
-                z_methy = z_methy + identity
+        values = [value_rna, value_cnv, value_methy]
+        if self.identity_modulation and identity is not None:
+            for k, projection in enumerate(self.identity_film):
+                gamma, beta = projection(identity).chunk(2, dim=-1)
+                values[k] = (1.0 + gamma) * values[k] + beta
+
+        z_rna = values[0] + self.emb_rna
+        z_cnv = values[1] + self.emb_cnv
+        z_methy = values[2] + self.emb_methy
+        if identity is not None:
+            z_rna = z_rna + identity
+            z_cnv = z_cnv + identity
+            z_methy = z_methy + identity
 
         return z_rna, z_cnv, z_methy

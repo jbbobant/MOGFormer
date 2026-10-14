@@ -2,16 +2,16 @@
 #
 # Every setting a run depends on lives here rather than in code. In particular
 # `exclude_classes` is stated explicitly even when empty: a silently defaulted
-# cohort is what previously desynchronised the baselines from the transformer.
+# cohort is how two models end up scored on different patients.
 name: tcga_5class
 results_dir: results/runs
 
 data:
-  raw_dir: data/raw
-  rna_file: data_rna_seq_v2_rsem.csv
-  cnv_file: data_cnv.csv
-  methy_file: data_methylation450.csv
-  clin_file: data_clinical.csv
+  raw_dir: data
+  rna_file: raw/data_rna_seq_v2_rsem.csv
+  cnv_file: raw/data_cnv.csv
+  methy_file: raw/data_methylation450.csv
+  clin_file: clean/data_clinical.csv
   label_col: SUBTYPE
   # Keep every labelled patient. Set to [BRCA_Normal] for the four-class run,
   # which stays paired because folds are remapped rather than regenerated.
@@ -19,7 +19,7 @@ data:
   curated_genes_file: data/raw/CGenes.txt
 
 folds:
-  path: results/folds.json
+  path: data/clean/folds.json
   n_splits: 5
   n_repeats: 5
   seed: 42

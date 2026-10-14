@@ -1,0 +1,73 @@
+# TCGA-BRCA (748 patients, `--bundle data/bundle/tcga`): every tested group switched on except
+# masking (whole-gene masking at 35% (half as interaction neighbourhoods) and one whole omics hidden for 20% of patients),
+# which keeps the reference encoder's setting.
+name: tcga_encoder_without_masking
+results_dir: results/experiments/ssl_pretraining
+data:
+  raw_dir: data/bundle/tcga
+  cohort_file: cohort_ssl.npz
+  ploidy_file: ploidy.csv
+  cohort_rule: every TCGA-BRCA patient with gene-level absolute copy number, RNA-seq expression
+    and promoter methylation (748); no label required, so 99 patients outside the 949-patient
+    supervised cohort are included
+  label_col: SUBTYPE
+  exclude_classes: []
+  curated_genes_file: curated_genes.txt
+preprocess:
+  top_k: 1000
+  active_modalities:
+  - rna
+  - cnv
+  - methy
+  mad_on_log_rna: true
+  impute: true
+  rna_scale: counts
+  cnv_representation: ploidy_relative
+  clip_z: 5.0
+graph:
+  edges_file: string_edges_experimental_database.tsv
+  grn_file: collectri_signed_edges.tsv
+  string_threshold: 400
+  max_distance: 4
+  pe_dim: 32
+  pe_method: rwpe
+  use_grn: true
+  weighted_pe: true
+model:
+  d: 128
+  mini_heads: 4
+  global_heads: 8
+  global_layers: 3
+  dropout: 0.2
+  attention_bias_mode: inside
+  lambda_gate: true
+  fusion_type: gated
+  mask_gene_frac: 0.15
+  mask_modality_frac: 0.15
+  mask_modality_weights:
+  - 2.0
+  - 1.0
+  - 1.0
+  global_offset: false
+  isolated_token: true
+  identity_modulation: true
+  n_summary_tokens: 4
+  global_head: cross_attention
+  fusion_residual: true
+train:
+  lr: 0.0001
+  min_lr: 1.0e-06
+  weight_decay: 0.0001
+  max_epochs: 600
+  patience: 60
+  batch_size: 32
+  log_every: 10
+  seed: 42
+  gate_lr_multiplier: 10.0
+  warmup_epochs: 20
+  lr_schedule: cosine
+  per_modality_loss: true
+  monitor_frac: 0.12
+  heldout_frac: 0.1
+  split_seed: 42
+  n_readout_masks: 10

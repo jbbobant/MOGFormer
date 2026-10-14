@@ -32,7 +32,13 @@ from scipy.cluster.hierarchy import leaves_list, linkage
 from scipy.spatial.distance import squareform
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
-from sklearn.metrics import adjusted_rand_score, silhouette_samples, silhouette_score
+from sklearn.metrics import (
+    adjusted_mutual_info_score,
+    adjusted_rand_score,
+    silhouette_samples,
+    silhouette_score,
+)
+from sklearn.mixture import GaussianMixture
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +47,50 @@ PAC_BOUNDS: tuple[float, float] = (0.1, 0.9)
 
 #: Consensus index at or above which a patient is a core member of its cluster.
 CORE_THRESHOLD = 0.8
+
+#: Clustering algorithms accepted by the consensus functions.
+CLUSTERING_ALGORITHMS: tuple[str, ...] = ("kmeans", "gmm")
+
+
+def fit_partition(
+    values: np.ndarray,
+    n_clusters: int,
+    algorithm: str = "kmeans",
+    seed: int = 42,
+    n_init: int = 10,
+) -> np.ndarray:
+    """Partition patients with one clustering algorithm.
+
+    Args:
+        values: Data of shape ``(n_samples, n_features)``.
+        n_clusters: Number of clusters.
+        algorithm: One of :data:`CLUSTERING_ALGORITHMS`. ``"gmm"`` fits a
+            full-covariance Gaussian mixture, with a small ridge on the
+            covariances so that small clusters stay well conditioned.
+        seed: Random state.
+        n_init: Initialisations; the best fit is kept.
+
+    Returns:
+        Cluster label per patient.
+
+    Raises:
+        ValueError: If ``algorithm`` is unknown.
+    """
+    if algorithm == "kmeans":
+        model = KMeans(n_clusters=n_clusters, n_init=n_init, random_state=seed)
+        return model.fit_predict(values)
+    if algorithm == "gmm":
+        mixture = GaussianMixture(
+            n_components=n_clusters,
+            covariance_type="full",
+            reg_covar=1e-3,
+            n_init=n_init,
+            random_state=seed,
+        )
+        return mixture.fit_predict(values)
+    raise ValueError(
+        f"unknown algorithm {algorithm!r}; available: {list(CLUSTERING_ALGORITHMS)}"
+    )
 
 
 @dataclass
@@ -109,6 +159,7 @@ def consensus_matrix(
     n_resample: int = 200,
     subsample_frac: float = 0.8,
     seed: int = 42,
+    algorithm: str = "kmeans",
 ) -> np.ndarray:
     """Build the co-assignment matrix over resampled clusterings.
 
@@ -117,7 +168,8 @@ def consensus_matrix(
         n_clusters: Clusters per resampled run.
         n_resample: Number of resamples.
         subsample_frac: Fraction of patients drawn per resample.
-        seed: Seed for the resampling and for each k-means run.
+        seed: Seed for the resampling and for each clustering run.
+        algorithm: One of :data:`CLUSTERING_ALGORITHMS`.
 
     Returns:
         Matrix of shape ``(n_samples, n_samples)`` whose entries are the
@@ -141,11 +193,13 @@ def consensus_matrix(
 
     for _ in range(n_resample):
         selected = rng.choice(n_samples, size, replace=False)
-        labels = KMeans(
-            n_clusters=n_clusters,
-            n_init=5,
-            random_state=int(rng.integers(1_000_000)),
-        ).fit_predict(values[selected])
+        labels = fit_partition(
+            values[selected],
+            n_clusters,
+            algorithm,
+            seed=int(rng.integers(1_000_000)),
+            n_init=5 if algorithm == "kmeans" else 1,
+        )
 
         one_hot = np.zeros((len(selected), n_clusters))
         one_hot[np.arange(len(selected)), labels] = 1
@@ -203,6 +257,7 @@ def run_consensus_clustering(
     n_resample: int = 200,
     subsample_frac: float = 0.8,
     seed: int = 42,
+    algorithm: str = "kmeans",
 ) -> dict[int, ConsensusResult]:
     """Cluster by consensus across a range of cluster counts.
 
@@ -212,6 +267,7 @@ def run_consensus_clustering(
         n_resample: Resamples per cluster count.
         subsample_frac: Fraction of patients per resample.
         seed: Seed for resampling and clustering.
+        algorithm: One of :data:`CLUSTERING_ALGORITHMS`.
 
     Returns:
         Mapping of cluster count to its result.
@@ -220,10 +276,10 @@ def run_consensus_clustering(
     results: dict[int, ConsensusResult] = {}
 
     for n_clusters in n_clusters_list:
-        matrix = consensus_matrix(values, n_clusters, n_resample, subsample_frac, seed)
-        labels = KMeans(
-            n_clusters=n_clusters, n_init=10, random_state=seed
-        ).fit_predict(values)
+        matrix = consensus_matrix(
+            values, n_clusters, n_resample, subsample_frac, seed, algorithm
+        )
+        labels = fit_partition(values, n_clusters, algorithm, seed=seed)
         pac = proportion_ambiguous_clustering(matrix)
         results[n_clusters] = ConsensusResult(
             n_clusters=n_clusters,
@@ -517,7 +573,7 @@ def compare_representations(
                 f"but the reference partition covers {len(reference_labels)}"
             )
         matrix = consensus_matrix(values, n_clusters, n_resample, subsample_frac, seed)
-        labels = KMeans(n_clusters, n_init=10, random_state=seed).fit_predict(values)
+        labels = fit_partition(values, n_clusters, seed=seed)
         rung = RepresentationRung(
             name=name,
             pac=proportion_ambiguous_clustering(matrix),
@@ -552,3 +608,241 @@ def partition_agreement(partitions: Mapping[str, np.ndarray]) -> pd.DataFrame:
                 partitions[row], partitions[column]
             )
     return matrix
+
+
+def bootstrap_agreement(
+    values: np.ndarray,
+    labels: np.ndarray,
+    n_clusters: int,
+    algorithm: str = "kmeans",
+    n_boot: int = 100,
+    seed: int = 42,
+) -> float:
+    """Mean ARI between a partition and its refits on bootstrap resamples.
+
+    Each resample draws patients with replacement, refits the partition on
+    them, and compares the refit with the original labels on the distinct
+    patients drawn. A partition that the data support reappears; one that
+    depends on which patients happened to be present does not.
+
+    Args:
+        values: Data of shape ``(n_samples, n_features)``.
+        labels: The partition of all patients.
+        n_clusters: Number of clusters.
+        algorithm: One of :data:`CLUSTERING_ALGORITHMS`.
+        n_boot: Bootstrap resamples.
+        seed: Seed of the resampling.
+
+    Returns:
+        The mean ARI over resamples.
+    """
+    rng = np.random.default_rng(seed)
+    n_samples = values.shape[0]
+    agreement = []
+    for _ in range(n_boot):
+        drawn = np.unique(rng.choice(n_samples, n_samples, replace=True))
+        refit = fit_partition(
+            values[drawn],
+            n_clusters,
+            algorithm,
+            seed=int(rng.integers(1_000_000)),
+            n_init=5 if algorithm == "kmeans" else 1,
+        )
+        agreement.append(adjusted_rand_score(labels[drawn], refit))
+    return float(np.mean(agreement))
+
+
+@dataclass(frozen=True)
+class Reduction:
+    """A fitted standardise-then-project map from features to components.
+
+    Attributes:
+        mean: Per-feature mean of the kept features.
+        scale: Per-feature standard deviation of the kept features.
+        kept: Boolean mask of the features with non-zero spread.
+        components: Principal axes, shape ``(n_kept_components, n_kept)``; an
+            identity row for a single feature.
+    """
+
+    mean: np.ndarray
+    scale: np.ndarray
+    kept: np.ndarray
+    components: np.ndarray
+
+    def transform(self, values: np.ndarray) -> np.ndarray:
+        """Map data onto the kept components.
+
+        Args:
+            values: Data of shape ``(n_samples, n_features)``.
+
+        Returns:
+            Component scores, shape ``(n_samples, n_kept_components)``.
+        """
+        z = (as_array(values)[:, self.kept] - self.mean) / self.scale
+        return z @ self.components.T
+
+    def weights_on_features(self, coefficients: np.ndarray) -> np.ndarray:
+        """Express a linear read-out of the components as weights on the features.
+
+        A score ``components · coefficients`` equals ``features · w`` up to a
+        constant, with the ``w`` returned here, which is what attributing the
+        score back to the features needs.
+
+        Args:
+            coefficients: One coefficient per kept component.
+
+        Returns:
+            One weight per original feature (zero for constant features).
+        """
+        weights = np.zeros(self.kept.shape[0])
+        weights[self.kept] = self.components.T @ coefficients / self.scale
+        return weights
+
+
+def fit_reduction(
+    values: np.ndarray, variance: float = 0.9, max_components: int = 32
+) -> Reduction:
+    """Fit the standardise-then-PCA reduction used before every downstream model.
+
+    Every representation is reduced the same way before clustering or a
+    survival model, so that a 512-d block-structured embedding, a PCA
+    comparator and a single score are treated on comparable terms, and a
+    Gaussian mixture has a covariance it can estimate. Fitting uses no label
+    and no outcome.
+
+    Args:
+        values: Data of shape ``(n_samples, n_features)``.
+        variance: Share of variance the kept components must explain.
+        max_components: Upper bound on the components kept.
+
+    Returns:
+        The fitted reduction. A single feature is kept, standardised.
+    """
+    values = as_array(values)
+    spread = values.std(axis=0)
+    kept = spread > 0
+    mean, scale = values[:, kept].mean(axis=0), spread[kept]
+    if int(kept.sum()) == 1:
+        return Reduction(mean, scale, kept, np.ones((1, 1)))
+    z = (values[:, kept] - mean) / scale
+    limit = min(max_components, z.shape[0] - 1, z.shape[1])
+    pca = PCA(n_components=limit).fit(z)
+    cumulative = np.cumsum(pca.explained_variance_ratio_)
+    n_kept = int(min(np.searchsorted(cumulative, variance) + 1, limit))
+    # PCA centres internally; z is already centred, so the projection is exact.
+    return Reduction(mean, scale, kept, pca.components_[:n_kept])
+
+
+def reduce_for_clustering(
+    values: np.ndarray, variance: float = 0.9, max_components: int = 32
+) -> np.ndarray:
+    """Standardise each feature, then keep the leading principal components.
+
+    Shorthand for fitting :func:`fit_reduction` and applying it to the same
+    data.
+
+    Args:
+        values: Data of shape ``(n_samples, n_features)``.
+        variance: Share of variance the kept components must explain.
+        max_components: Upper bound on the components kept.
+
+    Returns:
+        Principal-component scores, shape ``(n_samples, n_kept)``. A single
+        feature is returned standardised.
+    """
+    return fit_reduction(values, variance, max_components).transform(values)
+
+
+def partition_audit(
+    labels: np.ndarray, axes: pd.DataFrame, roles: Mapping[str, str] | None = None
+) -> pd.DataFrame:
+    """Compare a partition with every known axis, Holm-corrected.
+
+    Categorical axes are compared by adjusted mutual information and adjusted
+    Rand index, with a chi-squared test. Continuous axes are compared by the
+    share of their variance that lies between strata (the correlation ratio),
+    with a one-way ANOVA, through :func:`covariate_association`.
+
+    Args:
+        labels: Stratum per patient.
+        axes: One column per known axis, aligned to ``labels``.
+        roles: Optional role per axis (``"biology"``, ``"clinical"``,
+            ``"technical"``), carried through.
+
+    Returns:
+        One row per axis: ``kind``, ``ami``, ``ari``, ``eta_squared``, the
+        raw and Holm-corrected p-values and the role, sorted by the main
+        effect size (AMI or the correlation ratio).
+    """
+    rows = []
+    for name in axes.columns:
+        series = axes[name].reset_index(drop=True)
+        present = ~series.isna()
+        is_continuous = pd.api.types.is_numeric_dtype(series) and series.nunique() > 8
+        row: dict[str, object] = {
+            "axis": name,
+            "n": int(present.sum()),
+            "role": (roles or {}).get(name, "unspecified"),
+        }
+        if is_continuous:
+            effect, p_value, _ = covariate_association(
+                series.to_numpy(dtype=float)[present.to_numpy()],
+                pd.Series(labels[present.to_numpy()]).astype(str),
+            )
+            row.update(kind="continuous", eta_squared=effect, effect=effect)
+        else:
+            known = series[present].astype(str).to_numpy()
+            strata = labels[present.to_numpy()]
+            table = pd.crosstab(strata, known)
+            p_value = (
+                float(stats.chi2_contingency(table)[1])
+                if table.shape[0] > 1 and table.shape[1] > 1
+                else float("nan")
+            )
+            ami = float(adjusted_mutual_info_score(known, strata))
+            row.update(
+                kind="categorical",
+                ami=ami,
+                ari=float(adjusted_rand_score(known, strata)),
+                effect=ami,
+            )
+        row["p_value"] = p_value
+        rows.append(row)
+    frame = pd.DataFrame(rows)
+    frame["p_holm"] = _holm_correct(frame["p_value"].fillna(1.0).to_numpy())
+    return frame.sort_values("effect", ascending=False).reset_index(drop=True)
+
+
+def block_separation(
+    embedding: np.ndarray, labels: np.ndarray, block_width: int
+) -> pd.DataFrame:
+    """Share of each embedding block's variance that lies between strata.
+
+    Args:
+        embedding: Patients x dimensions, made of consecutive blocks.
+        labels: Stratum per patient.
+        block_width: Width of each block (a gene program's embedding).
+
+    Returns:
+        One row per block: its index and the between-strata share of its
+        variance, sorted from most to least separating.
+    """
+    rows = []
+    for block in range(embedding.shape[1] // block_width):
+        values = embedding[:, block * block_width : (block + 1) * block_width]
+        centred = values - values.mean(axis=0)
+        total = float((centred**2).sum())
+        between = sum(
+            float((labels == level).sum())
+            * float(
+                (
+                    (values[labels == level].mean(axis=0) - values.mean(axis=0)) ** 2
+                ).sum()
+            )
+            for level in np.unique(labels)
+        )
+        rows.append(
+            {"block": block, "between_share": between / total if total else 0.0}
+        )
+    frame = pd.DataFrame(rows)
+    return frame.sort_values("between_share", ascending=False).reset_index(drop=True)

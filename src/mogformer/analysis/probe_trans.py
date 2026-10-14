@@ -238,8 +238,8 @@ def observed_coexpression(inputs: torch.Tensor, factor: int, target: int) -> flo
         Spearman correlation, or ``nan`` when either is constant.
     """
     rna_index = MODALITY_INDEX["rna"]
-    first = inputs[:, factor, rna_index].numpy()
-    second = inputs[:, target, rna_index].numpy()
+    first = inputs[:, factor, rna_index].detach().cpu().numpy()
+    second = inputs[:, target, rna_index].detach().cpu().numpy()
     if np.std(first) < 1e-12 or np.std(second) < 1e-12:
         return float("nan")
     return float(spearmanr(first, second).correlation)
@@ -260,6 +260,7 @@ def run_trans_sweep(
     grid: np.ndarray = DEFAULT_GRID,
     n_boot: int = 1000,
     seed: int = 20240712,
+    max_factors: int | None = None,
 ) -> pd.DataFrame:
     """Probe every regulatory edge, alongside matched non-edge controls.
 
@@ -285,6 +286,9 @@ def run_trans_sweep(
         grid: Injected values.
         n_boot: Bootstrap resamples over patients.
         seed: Seed for control sampling and the bootstrap.
+        max_factors: Probe only the first this-many factors. For smoke tests
+            on a machine without a GPU; a sweep truncated this way is not a
+            result and the caller must say so.
 
     Returns:
         One row per probed pair, carrying the slope, the network's edge sign and
@@ -296,6 +300,9 @@ def run_trans_sweep(
     max_masked = max(2, int(MAX_MASK_FRACTION * n_genes))
 
     factors = sorted(np.nonzero((grn_np != 0).sum(axis=0))[0].tolist())
+    if max_factors is not None:
+        factors = factors[:max_factors]
+        logger.warning("TRUNCATED SWEEP: %d factor(s) only", len(factors))
     logger.info(
         "%s | %s: %d factors, %d edges, at most %d genes hidden per pass",
         null_label,

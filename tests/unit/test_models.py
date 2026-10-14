@@ -26,9 +26,9 @@ from mogformer.models.layers import (
 )
 from mogformer.training import (
     MultiClassFocalLoss,
+    inverse_frequency_weights,
     masked_huber_dual,
     participation_ratio,
-    sqrt_dampened_weights,
 )
 
 BATCH, N_GENES, WIDTH = 3, 6, 16
@@ -526,9 +526,10 @@ def test_ssl_returns_embeddings_only_when_masking_is_off(scalars, graph) -> None
     pe, spd, grn = graph
     out = build_ssl().eval()(*scalars, pe, spd, grn, mask=False)
 
-    assert set(out) == {"c", "H_final", "gate"}
+    assert set(out) == {"c", "H_final", "H_genes", "gate"}
     assert out["c"].shape == (BATCH, WIDTH)
     assert out["H_final"].shape == (BATCH, N_GENES + 1, WIDTH)
+    assert out["H_genes"].shape == (BATCH, N_GENES, WIDTH)
 
 
 def test_ssl_accepts_a_deterministic_mask(scalars, graph) -> None:
@@ -602,19 +603,19 @@ def test_focal_loss_rejects_bad_configuration() -> None:
         MultiClassFocalLoss(gamma=-1.0)
 
 
-def test_sqrt_dampened_weights_favour_rare_classes() -> None:
+def test_inverse_frequency_weights_favour_rare_classes() -> None:
     """The rarest class gets the largest weight, but not inverse-frequency large."""
     y = np.repeat([0, 1, 2], [100, 10, 1])
-    weights = sqrt_dampened_weights(y, num_classes=3)
+    weights = inverse_frequency_weights(y, num_classes=3)
 
     assert weights[2] > weights[1] > weights[0]
     # Dampened: the ratio is sqrt(100) = 10, not 100.
     assert weights[2] / weights[0] == pytest.approx(10.0, rel=1e-6)
 
 
-def test_sqrt_dampened_weights_handle_absent_classes() -> None:
+def test_inverse_frequency_weights_handle_absent_classes() -> None:
     """A class with no training examples receives zero weight, not infinity."""
-    weights = sqrt_dampened_weights(np.array([0, 0, 1]), num_classes=4)
+    weights = inverse_frequency_weights(np.array([0, 0, 1]), num_classes=4)
     assert weights[2] == 0.0
     assert weights[3] == 0.0
     assert np.isfinite(weights).all()
@@ -657,3 +658,152 @@ def test_participation_ratio_detects_collapse() -> None:
 
     spread = torch.randn(512, 8)
     assert participation_ratio(spread) > 5.0
+
+
+# --- modality subsets -----------------------------------------------------------
+
+
+def test_split_modalities_fills_absent_modalities_with_zeros() -> None:
+    """A single-modality run still hands the model three blocks, two of them empty."""
+    from mogformer.evaluation.estimator import split_modalities
+
+    features = np.arange(2 * 3, dtype=np.float32).reshape(2, 3)
+    rna, cnv, methy = split_modalities(features, 3, ("rna",))
+
+    np.testing.assert_array_equal(rna, features)
+    assert not cnv.any()
+    assert not methy.any()
+
+
+def test_split_modalities_keeps_block_order_for_a_pair() -> None:
+    """Two active modalities are read in canonical order, whatever order is given."""
+    from mogformer.evaluation.estimator import split_modalities
+
+    features = np.concatenate([np.ones((2, 4)), 2 * np.ones((2, 4))], axis=1)
+    rna, cnv, methy = split_modalities(features, 4, ("methy", "cnv"))
+
+    assert not rna.any()
+    assert (cnv == 1).all()
+    assert (methy == 2).all()
+
+
+def test_split_modalities_rejects_a_width_mismatch() -> None:
+    """A matrix that is not one block per active modality fails loudly."""
+    from mogformer.evaluation.estimator import split_modalities
+
+    with pytest.raises(ValueError, match="expected 6 columns"):
+        split_modalities(np.zeros((2, 9)), 3, ("rna", "cnv"))
+    with pytest.raises(ValueError, match="unknown modalities"):
+        split_modalities(np.zeros((2, 3)), 3, ("protein",))
+
+
+# --- configuration reaches the transformer ---------------------------------------
+
+
+#: Model settings consumed before the estimator is built rather than by it.
+_CONSUMED_UPSTREAM = {"pretrained_emb_file", "pretrained_emb_symbol_file"}
+
+#: Model settings of the self-supervised encoder only: its masking and its
+#: reconstruction decoder, and the isolated-gene code it alone builds.
+_SELF_SUPERVISED_ONLY = {
+    "mask_gene_frac",
+    "mask_modality_frac",
+    "mask_modality_weights",
+    "global_offset",
+    "isolated_token",
+    "omics_mask_prob",
+    "neighbourhood_mask_share",
+    "identity_modulation",
+    "n_summary_tokens",
+    "global_head",
+    "fusion_residual",
+    "program_source",
+    "n_programs",
+    "program_width",
+    "program_layers",
+    "program_input",
+}
+
+
+def _transformer_estimator(model_config):
+    """Build the registered transformer's classifier step from a model config."""
+    from mogformer.evaluation.registry import HarnessContext, mogformer_spec
+
+    context = HarnessContext(
+        n_genes=4,
+        gene_names=["A", "B", "C", "D"],
+        curated_genes=[],
+        pam50_genes=[],
+        n_classes=3,
+        string_cache=object(),
+        model=model_config,
+    )
+    pipeline = mogformer_spec(context).build(context)
+    return pipeline.named_steps["clf"]
+
+
+def test_every_architecture_setting_reaches_the_transformer() -> None:
+    """A model setting the estimator never receives is silently ignored.
+
+    That is how a run configured as gated fusion trained attention fusion
+    instead. Every field of the model configuration must arrive as an
+    estimator parameter with the configured value.
+    """
+    import dataclasses
+
+    from mogformer.config import ModelConfig
+
+    config = ModelConfig(fusion_type="gated", unimodal_dropout_fill="mask_token")
+    params = _transformer_estimator(config).get_params()
+    for field in dataclasses.fields(ModelConfig):
+        if field.name in _CONSUMED_UPSTREAM | _SELF_SUPERVISED_ONLY:
+            continue
+        assert field.name in params, f"{field.name} never reaches the estimator"
+        assert params[field.name] == getattr(config, field.name), field.name
+
+
+def test_gated_fusion_is_the_layer_that_gets_built() -> None:
+    """The configured fusion layer is the one inside the trained network."""
+    from mogformer.models.layers import GatedFusion
+
+    model = MultiOmicsGraphClassifier(
+        num_classes=3,
+        d=WIDTH,
+        pe_dim=4,
+        mini_heads=2,
+        global_heads=2,
+        fusion_type="gated",
+    )
+    assert isinstance(model.mini_transformer, GatedFusion)
+
+
+def test_inverse_frequency_weights_interpolate_with_the_power() -> None:
+    """Power one is full inverse frequency, zero is uniform, both mean one."""
+    y = np.array([0] * 90 + [1] * 10)
+    full = inverse_frequency_weights(y, num_classes=2, power=1.0)
+    uniform = inverse_frequency_weights(y, num_classes=2, power=0.0)
+    assert full[1] / full[0] == pytest.approx(9.0)
+    np.testing.assert_allclose(uniform, [1.0, 1.0])
+    with pytest.raises(ValueError, match="power"):
+        inverse_frequency_weights(y, num_classes=2, power=-1.0)
+
+
+def test_every_training_setting_reaches_the_transformer() -> None:
+    """The stopping rule and class weighting arrive with their configured values."""
+    from mogformer.config import ModelConfig, TrainConfig
+    from mogformer.evaluation.registry import HarnessContext, mogformer_spec
+
+    train = TrainConfig(min_epochs=100, selection_window=5, class_weight_power=1.0)
+    context = HarnessContext(
+        n_genes=4,
+        gene_names=["A", "B", "C", "D"],
+        curated_genes=[],
+        pam50_genes=[],
+        n_classes=3,
+        string_cache=object(),
+        model=ModelConfig(),
+        train=train,
+    )
+    params = mogformer_spec(context).build(context).named_steps["clf"].get_params()
+    for name in ("min_epochs", "selection_window", "class_weight_power", "patience"):
+        assert params[name] == getattr(train, name), name

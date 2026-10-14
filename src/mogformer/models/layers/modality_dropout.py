@@ -9,8 +9,8 @@ appear at all.
 At most one modality is dropped per gene, never two: with two hidden there is
 too little left to impute from, and the layer learns to output a constant.
 
-The same block previously existed verbatim in both the attention-based and the
-gated fusion layer. It lives here once so the two cannot drift apart.
+Both the attention-based and the gated fusion layer use this block. It lives
+here once so the two cannot drift apart.
 """
 
 from __future__ import annotations

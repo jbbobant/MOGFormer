@@ -9,6 +9,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import pytest
+import torch
 
 from mogformer.analysis.clustering import (
     CORE_THRESHOLD,
@@ -460,3 +461,14 @@ def test_events_per_variable_rejects_zero_events() -> None:
     """A model with no events cannot be fitted at all."""
     with pytest.raises(ValueError, match="zero events"):
         check_events_per_variable(n_events=0, n_covariates=1)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
+def test_observed_statistics_accept_inputs_on_the_gpu() -> None:
+    """Probes run on the GPU, so their observed-data statistics must too."""
+    from mogformer.analysis.probe_cis import observed_correlation
+    from mogformer.analysis.probe_trans import observed_coexpression
+
+    inputs = torch.randn(40, 3, 3, device="cuda")
+    assert np.isfinite(observed_coexpression(inputs, 0, 1))
+    assert np.isfinite(observed_correlation(inputs, 0, "methy"))

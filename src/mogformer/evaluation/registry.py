@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any, cast
 
 import numpy as np
+import pandas as pd
 from scipy.stats import rankdata
 from sklearn.base import BaseEstimator, ClassifierMixin
 from sklearn.dummy import DummyClassifier
@@ -27,8 +28,12 @@ from sklearn.pipeline import Pipeline
 from sklearn.svm import SVC
 from sklearn.utils.class_weight import compute_sample_weight
 
+from mogformer.config import GraphConfig, ModelConfig, TrainConfig
 from mogformer.data.omics import MODALITY_ORDER
 from mogformer.data.preprocess import MultiOmicsTransformer
+from mogformer.evaluation.estimator import GraphAwarePipeline, MOGFormerClassifier
+from mogformer.graph.grn import GRNSignedCache
+from mogformer.graph.string_graph import StringGraphCache
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +55,16 @@ class HarnessContext:
         xgb_device: Device string for the boosted-tree baseline.
         seed: Seed passed to every stochastic estimator.
         mad_on_log_rna: Rank expression by the deviation of its log.
+        rna_scale: Scale expression arrives on, ``"counts"`` or ``"log"``.
+        string_cache: Parsed interaction network. The transformer is only
+            registered when this is present, because without a graph it is not
+            the model this project is about.
+        grn_cache: Parsed regulatory network, or None.
+        graph: Graph settings for the transformer.
+        model: Architecture settings for the transformer.
+        train: Optimisation settings for the transformer.
+        pretrained_embeddings: Frozen gene vectors indexed by symbol, or None.
+        device: Torch device for the transformer, or None to detect.
     """
 
     n_genes: int
@@ -63,6 +78,14 @@ class HarnessContext:
     xgb_device: str = "cpu"
     seed: int = 42
     mad_on_log_rna: bool = False
+    rna_scale: str = "counts"
+    string_cache: StringGraphCache | None = None
+    grn_cache: GRNSignedCache | None = None
+    graph: GraphConfig | None = None
+    model: ModelConfig | None = None
+    train: TrainConfig | None = None
+    pretrained_embeddings: pd.DataFrame | None = None
+    device: str | None = None
 
 
 def build_preprocessor(
@@ -89,6 +112,7 @@ def build_preprocessor(
         curated_genes=context.curated_genes if curated is None else curated,
         active_modalities=tuple(modalities),
         mad_on_log_rna=context.mad_on_log_rna,
+        rna_scale=context.rna_scale,
     )
 
 
@@ -301,8 +325,14 @@ class ModelSpec:
     notes: str = ""
 
 
-def build_registry() -> dict[str, ModelSpec]:
+def build_registry(context: HarnessContext | None = None) -> dict[str, ModelSpec]:
     """Construct the full model registry.
+
+    Args:
+        context: Run-level settings. When it carries an interaction network the
+            transformer is registered alongside the baselines; without one only
+            the baselines are, so a graph-free run cannot silently score a
+            graph model on an empty graph.
 
     Returns:
         Mapping of registry key to specification, ordered from the performance
@@ -454,7 +484,100 @@ def build_registry() -> dict[str, ModelSpec]:
         notes="strongest classical model in this regime",
     )
 
+    if context is not None and context.string_cache is not None:
+        registry["M_mogformer"] = mogformer_spec(context)
+
     return registry
+
+
+def mogformer_spec(context: HarnessContext) -> ModelSpec:
+    """Build the transformer's specification for one run.
+
+    The transformer is registered like any other model so that it is scored on
+    the same folds, by the same metric functions, against the same paired
+    statistics. That is the whole point: a protocol difference between the
+    transformer and its baselines is exactly the defect this harness exists to
+    rule out.
+
+    Args:
+        context: Run-level settings, which must carry an interaction network.
+
+    Returns:
+        A specification wrapping the transformer in a graph-aware pipeline.
+
+    Raises:
+        ValueError: If the context carries no interaction network.
+    """
+    if context.string_cache is None:
+        raise ValueError("the transformer needs an interaction network")
+
+    graph = context.graph or GraphConfig()
+    model = context.model or ModelConfig()
+    train = context.train or TrainConfig()
+
+    def build(ctx: HarnessContext) -> BaseEstimator:
+        if ctx.string_cache is None:
+            raise ValueError("the transformer needs an interaction network")
+        return GraphAwarePipeline(
+            [
+                ("prep", build_preprocessor(ctx, ctx.active_modalities)),
+                (
+                    "clf",
+                    MOGFormerClassifier(
+                        # Overwritten per fold by the pipeline, from the genes
+                        # the preprocessing step actually selected.
+                        selected_genes=(),
+                        string_cache=ctx.string_cache,
+                        grn_cache=ctx.grn_cache if graph.use_grn else None,
+                        num_classes=ctx.n_classes,
+                        d=model.d,
+                        pe_dim=graph.pe_dim,
+                        pe_method=graph.pe_method,
+                        mini_heads=model.mini_heads,
+                        global_heads=model.global_heads,
+                        global_layers=model.global_layers,
+                        dropout=model.dropout,
+                        rna_dropout_prob=model.rna_dropout_prob,
+                        cnv_dropout_prob=model.cnv_dropout_prob,
+                        meth_dropout_prob=model.meth_dropout_prob,
+                        max_distance=graph.max_distance,
+                        attention_bias_mode=model.attention_bias_mode,
+                        numerical_tokenizer=model.numerical_tokenizer,
+                        plr_n_frequencies=model.plr_n_frequencies,
+                        plr_sigma=model.plr_sigma,
+                        unimodal_dropout_fill=model.unimodal_dropout_fill,
+                        fusion_type=model.fusion_type,
+                        gene_id_embedding=model.gene_id_embedding,
+                        universe_genes=ctx.gene_names,
+                        pretrained_embeddings=ctx.pretrained_embeddings,
+                        pretrained_emb_adapter_rank=(model.pretrained_emb_adapter_rank),
+                        lambda_gate=model.lambda_gate,
+                        use_grn=graph.use_grn,
+                        lr=train.lr,
+                        min_lr=train.min_lr,
+                        weight_decay=train.weight_decay,
+                        max_epochs=train.max_epochs,
+                        patience=train.patience,
+                        min_epochs=train.min_epochs,
+                        selection_window=train.selection_window,
+                        batch_size=train.batch_size,
+                        inner_val_frac=train.inner_val_frac,
+                        focal_gamma=train.focal_gamma,
+                        class_weight_power=train.class_weight_power,
+                        seed=train.seed,
+                        active_modalities=tuple(ctx.active_modalities),
+                        device=ctx.device,
+                    ),
+                ),
+            ]
+        )
+
+    return ModelSpec(
+        name="M_mogformer",
+        family="transformer",
+        build=build,
+        notes="hierarchical graph transformer, scored on the shared partition",
+    )
 
 
 def late_fusion_spec(name: str, base: ModelSpec) -> ModelSpec:

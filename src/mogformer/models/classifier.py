@@ -16,6 +16,7 @@ from collections.abc import Sequence
 import torch
 from torch import nn
 
+from mogformer.models.layers.gated_fusion import FUSION_TYPES, GatedFusion
 from mogformer.models.layers.global_transformer import GlobalGraphTransformer
 from mogformer.models.layers.mini_transformer import MiniTransformer
 from mogformer.models.layers.modality_lifting import ModalityLifting
@@ -28,7 +29,9 @@ class MultiOmicsGraphClassifier(nn.Module):
         d: Token width.
         num_classes: Number of subtypes predicted.
         lifter: Scalar-to-token stage.
-        mini_transformer: Intra-gene fusion stage.
+        mini_transformer: Intra-gene fusion stage, whichever of the two
+            implementations ``fusion_type`` selected.
+        fusion_type: Which intra-gene fusion layer is in use.
         global_transformer: Inter-gene contextualisation stage.
         classifier_head: Bottleneck head over the tumor summary token.
     """
@@ -57,6 +60,7 @@ class MultiOmicsGraphClassifier(nn.Module):
         plr_sigma: float = 1.0,
         lambda_gate: bool = False,
         unimodal_dropout_fill: str = "zero",
+        fusion_type: str = "attention",
         use_grn: bool = False,
     ) -> None:
         """Assemble the four stages.
@@ -87,7 +91,12 @@ class MultiOmicsGraphClassifier(nn.Module):
             lambda_gate: Per-head learnable scaling of the distance bias.
             unimodal_dropout_fill: One of
                 :data:`~mogformer.models.layers.modality_dropout.DROPOUT_FILLS`.
+            fusion_type: Intra-gene fusion layer, one of
+                :data:`~mogformer.models.layers.gated_fusion.FUSION_TYPES`.
             use_grn: Enable the signed regulatory attention bias.
+
+        Raises:
+            ValueError: If ``fusion_type`` is unknown.
         """
         super().__init__()
         self.d = d
@@ -105,15 +114,30 @@ class MultiOmicsGraphClassifier(nn.Module):
             pretrained_emb_adapter_rank=pretrained_emb_adapter_rank,
         )
 
-        self.mini_transformer = MiniTransformer(
-            d=d,
-            num_heads=mini_heads,
-            dropout=dropout,
-            rna_dropout_prob=rna_dropout_prob,
-            cnv_dropout_prob=cnv_dropout_prob,
-            meth_dropout_prob=meth_dropout_prob,
-            unimodal_dropout_fill=unimodal_dropout_fill,
-        )
+        if fusion_type not in FUSION_TYPES:
+            raise ValueError(
+                f"unknown fusion type {fusion_type!r}; available: {list(FUSION_TYPES)}"
+            )
+        self.fusion_type = fusion_type
+        if fusion_type == "gated":
+            self.mini_transformer: GatedFusion | MiniTransformer = GatedFusion(
+                d=d,
+                dropout=dropout,
+                rna_dropout_prob=rna_dropout_prob,
+                cnv_dropout_prob=cnv_dropout_prob,
+                meth_dropout_prob=meth_dropout_prob,
+                unimodal_dropout_fill=unimodal_dropout_fill,
+            )
+        else:
+            self.mini_transformer = MiniTransformer(
+                d=d,
+                num_heads=mini_heads,
+                dropout=dropout,
+                rna_dropout_prob=rna_dropout_prob,
+                cnv_dropout_prob=cnv_dropout_prob,
+                meth_dropout_prob=meth_dropout_prob,
+                unimodal_dropout_fill=unimodal_dropout_fill,
+            )
 
         self.global_transformer = GlobalGraphTransformer(
             d=d,

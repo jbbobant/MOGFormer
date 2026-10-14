@@ -30,8 +30,10 @@ class GlobalGraphTransformer(nn.Module):
         max_distance: Largest hop count represented exactly by the bias.
         summary_distance: Sentinel distance assigned to the summary token's row
             and column, giving it a bias bucket of its own.
-        tumor_cls: The learnable summary token.
+        tumor_cls: The learnable summary tokens, shape ``(1, K, d)``.
+        n_summary_tokens: Number of summary tokens ``K`` ahead of the genes.
         layers: The stack of structural attention blocks.
+        isolated_token: Whether genes without an edge get a learned code.
     """
 
     def __init__(
@@ -46,6 +48,8 @@ class GlobalGraphTransformer(nn.Module):
         dropout: float = 0.1,
         lambda_gate: bool = False,
         use_grn: bool = False,
+        isolated_token: bool = False,
+        n_summary_tokens: int = 1,
     ) -> None:
         """Build the projector, the summary token and the attention stack.
 
@@ -62,7 +66,21 @@ class GlobalGraphTransformer(nn.Module):
             lambda_gate: Per-head learnable scaling of the distance bias.
             use_grn: Enable the signed regulatory bias in every block. The
                 regulatory matrix is still supplied per forward pass.
+            isolated_token: Add a learned vector to every gene with no edge in
+                the interaction graph. Such genes otherwise share one identical
+                positional encoding (all-zero return probabilities) and one
+                distance-bias row, so position cannot tell them from each
+                other or mark them as unconnected.
+            n_summary_tokens: Summary tokens prepended to the genes. One token
+                must hold the whole patient state in a single vector; several
+                can each attend to a different part of it. They share the
+                summary distance bucket and start from distinct random values.
+
+        Raises:
+            ValueError: If ``n_summary_tokens`` is not positive.
         """
+        if n_summary_tokens < 1:
+            raise ValueError(f"n_summary_tokens must be >= 1, got {n_summary_tokens}")
         super().__init__()
         self.d = d
         self.max_distance = max_distance
@@ -70,7 +88,8 @@ class GlobalGraphTransformer(nn.Module):
 
         self.concat_projector = nn.Linear(d + pe_dim, d)
 
-        self.tumor_cls = nn.Parameter(torch.randn(1, 1, d))
+        self.n_summary_tokens = n_summary_tokens
+        self.tumor_cls = nn.Parameter(torch.randn(1, n_summary_tokens, d))
         nn.init.normal_(self.tumor_cls, mean=0.0, std=0.02)
 
         self.layers = nn.ModuleList(
@@ -87,6 +106,11 @@ class GlobalGraphTransformer(nn.Module):
                 for _ in range(num_layers)
             ]
         )
+
+        self.isolated_token = isolated_token
+        if isolated_token:
+            self.isolated_embedding = nn.Parameter(torch.zeros(1, 1, d))
+            nn.init.normal_(self.isolated_embedding, mean=0.0, std=0.02)
 
         if use_grn:
             for layer in self.layers:
@@ -111,22 +135,30 @@ class GlobalGraphTransformer(nn.Module):
             structural_bias: When False, attention ignores both graph biases.
 
         Returns:
-            Tuple of the summary token state, shape ``(batch, d)``, and the full
-            sequence including it, shape ``(batch, n_genes + 1, d)``.
+            Tuple of the summary tokens' states concatenated, shape
+            ``(batch, K * d)`` (``(batch, d)`` with one token), and the full
+            sequence, shape ``(batch, K + n_genes, d)``, summary tokens first.
         """
         batch, _, width = h.shape
 
         expanded_pe = graph_pe.unsqueeze(0).expand(batch, -1, -1)
         tokens = self.concat_projector(torch.cat([h, expanded_pe], dim=-1))
+        if self.isolated_token:
+            # A gene is isolated when every other gene sits in the unreachable
+            # bucket, which is exactly when it has no edge.
+            reachable = (spd_matrix <= self.max_distance).sum(dim=1) - 1
+            isolated = (reachable == 0).to(tokens.dtype).view(1, -1, 1)
+            tokens = tokens + isolated * self.isolated_embedding
 
-        summary = self.tumor_cls.expand(batch, 1, width)
+        k = self.n_summary_tokens
+        summary = self.tumor_cls.expand(batch, k, width)
         sequence = torch.cat([summary, tokens], dim=1)
 
-        # The summary token gets a distance bucket of its own rather than
+        # The summary tokens get a distance bucket of their own rather than
         # sharing the zero-distance bucket that means "this gene is itself".
-        padded_spd = F.pad(spd_matrix, (1, 0, 1, 0), value=self.summary_distance)
+        padded_spd = F.pad(spd_matrix, (k, 0, k, 0), value=self.summary_distance)
         padded_grn = (
-            None if grn_matrix is None else F.pad(grn_matrix, (1, 0, 1, 0), value=0)
+            None if grn_matrix is None else F.pad(grn_matrix, (k, 0, k, 0), value=0)
         )
 
         state = sequence
@@ -134,4 +166,4 @@ class GlobalGraphTransformer(nn.Module):
             state = layer(
                 state, padded_spd, padded_grn, structural_bias=structural_bias
             )
-        return state[:, 0, :], state
+        return state[:, :k, :].reshape(batch, k * width), state

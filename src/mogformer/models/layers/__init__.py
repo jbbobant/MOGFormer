@@ -14,6 +14,7 @@ from mogformer.models.layers.modality_lifting import (
     ModalityLifting,
     PeriodicLinearTokenizer,
 )
+from mogformer.models.layers.program_readout import ProgramReadout
 from mogformer.models.layers.structural_attention import (
     ATTENTION_BIAS_MODES,
     StructuralAttentionBlock,
@@ -33,6 +34,7 @@ __all__ = [
     "ModalityDropout",
     "ModalityLifting",
     "PeriodicLinearTokenizer",
+    "ProgramReadout",
     "StructuralAttentionBlock",
     "StructuralGraphAttention",
 ]

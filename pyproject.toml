@@ -17,6 +17,8 @@ dependencies = [
     "matplotlib>=3.10",
     "seaborn>=0.13",
     "pyyaml>=6.0",
+    "pyarrow>=25.0.1",
+    "mofapy2>=0.7.5",
 ]
 
 [project.optional-dependencies]
@@ -24,7 +26,7 @@ dependencies = [
 baselines = [
     "xgboost>=2.1",
 ]
-# Survival, clustering and figure generation for the analysis phases.
+# Survival, clustering and figure generation for the downstream analyses.
 analysis = [
     "lifelines>=0.29",
     "umap-learn>=0.5",
@@ -43,6 +45,7 @@ dev = [
     "mypy>=1.11",
     "pandas-stubs",
     "types-pyyaml",
+    "pre-commit>=4.0",
 ]
 
 [build-system]
@@ -58,15 +61,15 @@ packages = ["src/mogformer"]
 [tool.uv]
 default-groups = ["dev"]
 
-# CPU-only torch: training runs on Kaggle GPUs, local installs only need to be
-# able to execute the test suite on synthetic data.
+# CUDA 12.8 torch: the first build series with kernels for Blackwell (sm_120)
+# GPUs. It still runs on CPU where no GPU is present.
 [[tool.uv.index]]
-name = "pytorch-cpu"
-url = "https://download.pytorch.org/whl/cpu"
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
 [tool.uv.sources]
-torch = { index = "pytorch-cpu" }
+torch = { index = "pytorch-cu128" }
 
 # ---------------------------------------------------------------------------
 # ruff
@@ -74,9 +77,9 @@ torch = { index = "pytorch-cpu" }
 [tool.ruff]
 line-length = 88
 target-version = "py311"
-# Unmigrated data-acquisition and figure scripts keep their original style
-# until they are folded into the package.
-extend-exclude = ["scripts"]
+# Unmigrated data-acquisition and figure scripts (scripts/legacy) keep their
+# original style until they are folded into the package.
+extend-exclude = ["scripts/legacy"]
 
 [tool.ruff.lint]
 select = [
@@ -135,7 +138,8 @@ filterwarnings = ["error::DeprecationWarning:mogformer.*"]
 [tool.mypy]
 # No explicit python_version: mypy tracks the interpreter in .venv. Language
 # level compatibility with the 3.11 floor is enforced by ruff target-version.
-files = ["src/mogformer", "utils"]
+files = ["src/mogformer", "utils", "scripts"]
+exclude = ["scripts/legacy/"]
 strict_equality = true
 warn_redundant_casts = true
 warn_unused_ignores = true
@@ -152,6 +156,8 @@ module = [
     "upsetplot.*",
     "lifelines.*",
     "xgboost.*",
+    "mofapy2.*",
+    "joblib.*",
 ]
 ignore_missing_imports = true
 

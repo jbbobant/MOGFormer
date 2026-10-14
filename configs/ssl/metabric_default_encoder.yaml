@@ -1,0 +1,91 @@
+# METABRIC default self-supervised encoder (`--bundle data/bundle/metabric/ssl`), selected by the
+# leave-one-group-out ablation (configs/encoder_ablation/README.md): the reference encoder
+# (configs/ssl/metabric.yaml) plus masking (35% whole genes, half as interaction neighbourhoods;
+# one whole omics hidden for 20% of patients), identity modulation, the fusion residual, one
+# summary token with the scale-only global head, and the global-head loss weighted 0.5. Trained
+# for 1,200 epochs, keeping the highest-RankMe epoch within 1% of the best monitoring loss
+# (configs/embedding_spread/README.md). The patient embedding is read by 16 program-scoped queries
+# over the fused gene tokens. Expression and methylation are ComBat-corrected for processing batch
+# (COHORT) first (configs/batch_correction/README.md); its three seeds are metabric_combat_encoder_seed42-44.
+name: metabric_default_encoder
+results_dir: results/experiments/ssl_pretraining
+data:
+  batch_file: clinical.csv
+  batch_column: COHORT
+  raw_dir: data/bundle/metabric/ssl
+  cohort_file: cohort_ssl.npz
+  cohort_rule: every METABRIC patient with expression, ordinal copy-number calls and promoter
+    methylation (1416); no label required
+  label_col: SUBTYPE
+  exclude_classes: []
+  curated_genes_file: curated_genes.txt
+preprocess:
+  batch_correction: combat
+  batch_modalities:
+  - rna
+  - methy
+  top_k: 1000
+  active_modalities:
+  - rna
+  - cnv
+  - methy
+  mad_on_log_rna: true
+  impute: true
+  rna_scale: log
+  cnv_representation: ordinal
+  clip_z: 5.0
+graph:
+  edges_file: string_edges_experimental_database.tsv
+  grn_file: collectri_signed_edges.tsv
+  string_threshold: 400
+  max_distance: 4
+  pe_dim: 32
+  pe_method: rwpe
+  use_grn: true
+  weighted_pe: true
+model:
+  d: 128
+  mini_heads: 4
+  global_heads: 8
+  global_layers: 3
+  dropout: 0.2
+  attention_bias_mode: inside
+  lambda_gate: true
+  fusion_type: gated
+  mask_gene_frac: 0.35
+  mask_modality_frac: 0.15
+  mask_modality_weights:
+  - 2.0
+  - 1.0
+  - 1.0
+  global_offset: false
+  isolated_token: true
+  neighbourhood_mask_share: 0.5
+  omics_mask_prob: 0.2
+  program_source: coexpression
+  n_programs: 16
+  program_width: 32
+  program_layers: 2
+  program_input: fused
+  identity_modulation: true
+  fusion_residual: true
+train:
+  lr: 0.0001
+  min_lr: 1.0e-06
+  weight_decay: 0.0001
+  max_epochs: 1200
+  patience: 150
+  batch_size: 32
+  log_every: 10
+  seed: 42
+  gate_lr_multiplier: 10.0
+  warmup_epochs: 20
+  lr_schedule: cosine
+  per_modality_loss: true
+  monitor_frac: 0.12
+  heldout_frac: 0.1
+  split_seed: 42
+  n_readout_masks: 10
+  lambda_global: 0.5
+  selection: loss_then_rank
+  selection_tolerance: 0.01

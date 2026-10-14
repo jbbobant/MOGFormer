@@ -350,8 +350,8 @@ def observed_correlation(
     Returns:
         Spearman correlation, or ``nan`` when either channel is constant.
     """
-    injected = inputs[:, gene, MODALITY_INDEX[inject_modality]].numpy()
-    expression = inputs[:, gene, MODALITY_INDEX["rna"]].numpy()
+    injected = inputs[:, gene, MODALITY_INDEX[inject_modality]].detach().cpu().numpy()
+    expression = inputs[:, gene, MODALITY_INDEX["rna"]].detach().cpu().numpy()
     if np.std(injected) < 1e-12 or np.std(expression) < 1e-12:
         return float("nan")
     return float(spearmanr(injected, expression).correlation)

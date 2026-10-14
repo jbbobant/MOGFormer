@@ -6,7 +6,9 @@ across cross-validation folds hides exactly the variation that decides whether
 two models actually differ.
 
 The palette is Okabe–Ito, which stays distinguishable under the common forms of
-colour vision deficiency.
+colour vision deficiency. Newer figures use :data:`SOFT_PALETTE`: the same few
+hues, muted, drawn as a light fill under a saturated outline, which reads more
+calmly on a page full of figures.
 """
 
 from __future__ import annotations
@@ -38,6 +40,38 @@ OKABE_ITO: dict[str, str] = {
 }
 
 
+#: Muted palette of the newer figures: a saturated outline colour per hue,
+#: paired with :func:`light` for fills and confidence bands.
+SOFT_PALETTE: dict[str, str] = {
+    "coral": "#E8573F",
+    "blue": "#2F6DAE",
+    "teal": "#1B9E86",
+    "mauve": "#C26BA8",
+    "amber": "#E8A33D",
+    "sky": "#7FB3DA",
+    "grey": "#8C8C8C",
+    "ink": "#3A3A3A",
+}
+
+
+def light(colour: str, amount: float = 0.7) -> tuple[float, float, float]:
+    """Blend a colour towards white, for fills, bands and box interiors.
+
+    Args:
+        colour: Any matplotlib colour.
+        amount: Share of white, from 0 (the colour) to 1 (white).
+
+    Returns:
+        The blended RGB triple.
+    """
+    red, green, blue = matplotlib.colors.to_rgb(colour)
+    return (
+        red + (1 - red) * amount,
+        green + (1 - green) * amount,
+        blue + (1 - blue) * amount,
+    )
+
+
 def apply_house_style() -> None:
     """Set the matplotlib defaults used by every figure in the project."""
     plt.rcParams.update(
@@ -46,13 +80,23 @@ def apply_house_style() -> None:
             "savefig.dpi": 300,
             "savefig.bbox": "tight",
             "font.size": 10,
+            "font.family": "sans-serif",
+            "font.sans-serif": ["Arial", "Helvetica", "DejaVu Sans"],
             "axes.titlesize": 11,
             "axes.titleweight": "bold",
             "axes.spines.top": False,
             "axes.spines.right": False,
+            "axes.edgecolor": "#4D4D4D",
+            "axes.labelcolor": "#2B2B2B",
+            "xtick.color": "#4D4D4D",
+            "ytick.color": "#4D4D4D",
             "axes.grid": True,
-            "grid.alpha": 0.25,
+            "grid.color": "#E6E6E6",
+            "grid.linewidth": 0.8,
+            "grid.alpha": 1.0,
+            "axes.axisbelow": True,
             "legend.frameon": False,
+            "legend.fontsize": 8,
         }
     )
 
@@ -81,10 +125,22 @@ def save_figure(figure: plt.Figure, directory: str | Path, name: str) -> Path:
     return png
 
 
+def set_figure_title(axes: plt.Axes, title: str, context: str = "") -> None:
+    """Title a figure so it reads as a result without the text around it.
+
+    Args:
+        axes: Axes to title.
+        title: The quantity shown, stated as a finding would be.
+        context: Cohort, sample size or run, appended as a final line.
+    """
+    axes.set_title(f"{title}\n{context}" if context else title)
+
+
 def plot_model_comparison(
     per_fold: Mapping[str, np.ndarray],
     directory: str | Path,
     name: str = "model_comparison",
+    context: str = "",
     metric: str = "macro-F1",
     references: Mapping[str, float] | None = None,
 ) -> Path:
@@ -97,6 +153,8 @@ def plot_model_comparison(
         per_fold: Mapping of model name to its per-fold scores.
         directory: Destination directory.
         name: File stem.
+        context: Cohort, sample size or run the figure describes, drawn as a
+            final title line so the figure reads on its own.
         metric: Axis label.
         references: Optional horizontal reference lines, by label.
 
@@ -136,7 +194,11 @@ def plot_model_comparison(
     axes.set_yticks(range(1, len(ordered) + 1))
     axes.set_yticklabels(ordered)
     axes.set_xlabel(f"{metric} ({len(values[0])} folds)")
-    axes.set_title("Model comparison on the shared partition")
+    set_figure_title(
+        axes,
+        f"{metric} per model over {len(values[0])} cross-validation estimates",
+        context,
+    )
     figure.tight_layout()
     return save_figure(figure, directory, name)
 
@@ -145,6 +207,7 @@ def plot_interval_forest(
     summary: pd.DataFrame,
     directory: str | Path,
     name: str = "interval_forest",
+    context: str = "",
     metric: str = "macro_f1",
 ) -> Path:
     """Draw each model's mean with both confidence intervals.
@@ -157,6 +220,8 @@ def plot_interval_forest(
             two interval pairs.
         directory: Destination directory.
         name: File stem.
+        context: Cohort, sample size or run the figure describes, drawn as a
+            final title line so the figure reads on its own.
         metric: Metric to draw.
 
     Returns:
@@ -189,7 +254,12 @@ def plot_interval_forest(
     axes.set_yticks(positions)
     axes.set_yticklabels(rows["model"])
     axes.set_xlabel(metric)
-    axes.set_title("Mean and interval per model")
+    estimates = (
+        f", {int(rows['n'].max())} estimates" if "n" in rows and len(rows) else ""
+    )
+    set_figure_title(
+        axes, f"Mean {metric} per model with 95% intervals{estimates}", context
+    )
     axes.legend(loc="lower right", fontsize=8)
     figure.tight_layout()
     return save_figure(figure, directory, name)
@@ -200,6 +270,7 @@ def plot_per_class_f1(
     class_names: Sequence[str],
     directory: str | Path,
     name: str = "per_class_f1",
+    context: str = "",
 ) -> Path:
     """Draw per-class F1 for every model.
 
@@ -212,6 +283,8 @@ def plot_per_class_f1(
         class_names: Classes to draw, in order.
         directory: Destination directory.
         name: File stem.
+        context: Cohort, sample size or run the figure describes, drawn as a
+            final title line so the figure reads on its own.
 
     Returns:
         The path of the written PNG.
@@ -241,7 +314,7 @@ def plot_per_class_f1(
     axes.set_xticklabels(class_names, rotation=20, ha="right")
     axes.set_ylabel("F1")
     axes.set_ylim(0, 1)
-    axes.set_title("Per-class F1 — where the macro average comes from")
+    set_figure_title(axes, "Per-class F1 by model, mean over folds", context)
     axes.legend(fontsize=8, ncol=2)
     figure.tight_layout()
     return save_figure(figure, directory, name)
@@ -252,6 +325,7 @@ def plot_critical_difference(
     critical_difference: float,
     directory: str | Path,
     name: str = "critical_difference",
+    context: str = "",
 ) -> Path:
     """Draw a critical-difference diagram over average ranks.
 
@@ -264,6 +338,8 @@ def plot_critical_difference(
         critical_difference: Nemenyi critical difference.
         directory: Destination directory.
         name: File stem.
+        context: Cohort, sample size or run the figure describes, drawn as a
+            final title line so the figure reads on its own.
 
     Returns:
         The path of the written PNG.
@@ -297,7 +373,9 @@ def plot_critical_difference(
 
     axes.set_yticks([])
     axes.set_xlabel("average rank (lower is better)")
-    axes.set_title("Critical-difference diagram")
+    set_figure_title(
+        axes, "Average rank per model, Friedman test with Nemenyi CD", context
+    )
     axes.set_ylim(-1.8, len(ranks))
     figure.tight_layout()
     return save_figure(figure, directory, name)
@@ -308,6 +386,7 @@ def plot_confusion(
     class_names: Sequence[str],
     directory: str | Path,
     name: str = "confusion",
+    context: str = "",
     normalise: bool = True,
 ) -> Path:
     """Draw a confusion matrix, row-normalised by default.
@@ -320,6 +399,8 @@ def plot_confusion(
         class_names: Class labels in matrix order.
         directory: Destination directory.
         name: File stem.
+        context: Cohort, sample size or run the figure describes, drawn as a
+            final title line so the figure reads on its own.
         normalise: Divide each row by its total.
 
     Returns:
@@ -352,7 +433,10 @@ def plot_confusion(
     axes.set_yticklabels(class_names)
     axes.set_xlabel("predicted")
     axes.set_ylabel("true")
-    axes.set_title("Confusion" + (" (row-normalised)" if normalise else ""))
+    kind = "row-normalised recall per true class" if normalise else "counts"
+    set_figure_title(
+        axes, f"Confusion matrix, {kind}, n = {int(matrix.sum())}", context
+    )
     axes.grid(False)
     figure.colorbar(image, ax=axes, fraction=0.046, pad=0.04)
     figure.tight_layout()

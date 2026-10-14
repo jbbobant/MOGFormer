@@ -25,6 +25,11 @@ from torch import nn
 
 from mogformer.models.layers.modality_dropout import ModalityDropout
 
+#: The two intra-gene fusion layers. Defined here rather than beside either
+#: implementation, so the supervised and self-supervised branches choose
+#: between them from one list.
+FUSION_TYPES: tuple[str, ...] = ("gated", "attention")
+
 
 class GatedFusion(nn.Module):
     """Fuse per-gene modality tokens by a competing softmax gate.
@@ -42,6 +47,7 @@ class GatedFusion(nn.Module):
         cnv_dropout_prob: float = 0.15,
         meth_dropout_prob: float = 0.15,
         unimodal_dropout_fill: str = "zero",
+        residual: bool = False,
     ) -> None:
         """Build the gate scorer and the output projection.
 
@@ -53,9 +59,16 @@ class GatedFusion(nn.Module):
             meth_dropout_prob: Probability of hiding methylation per gene.
             unimodal_dropout_fill: One of
                 :data:`~mogformer.models.layers.modality_dropout.DROPOUT_FILLS`.
+            residual: Add a linear map of the three unfused tokens to the
+                fused one: ``h = GELU(W LN(sum_m a_m z_m)) + W_r [z_m]_m``.
+                The gate's convex combination keeps only what the omics share
+                along one direction per gene; the residual carries what is
+                specific to each. Zero-initialised, so training starts from the
+                gate alone.
         """
         super().__init__()
         self.d = d
+        self.residual = residual
 
         self.modality_dropout = ModalityDropout(
             d=d,
@@ -72,6 +85,10 @@ class GatedFusion(nn.Module):
         )
         self.proj = nn.Sequential(nn.LayerNorm(d), nn.Linear(d, d), nn.GELU())
         self.out_drop = nn.Dropout(dropout)
+        if residual:
+            self.residual_proj = nn.Linear(3 * d, d)
+            nn.init.zeros_(self.residual_proj.weight)
+            nn.init.zeros_(self.residual_proj.bias)
 
     def forward(
         self,
@@ -105,4 +122,7 @@ class GatedFusion(nn.Module):
             + weights[..., 1:2] * z_cnv
             + weights[..., 2:3] * z_methy
         )
-        return self.out_drop(self.proj(fused)), weights
+        output = self.proj(fused)
+        if self.residual:
+            output = output + self.residual_proj(context)
+        return self.out_drop(output), weights

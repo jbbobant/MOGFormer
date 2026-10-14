@@ -277,3 +277,101 @@ def test_grn_rejects_unknown_direction(grn_file: str) -> None:
     cache = GRNSignedCache(grn_file, ["ESR1", "TP53", "MYC"])
     with pytest.raises(ValueError, match="unknown grn direction"):
         cache.induced_signed_adjacency(["ESR1", "MYC"], direction="sideways")
+
+
+def test_nearest_encoding_distance_marks_identical_nodes_zero() -> None:
+    """Two nodes with the same encoding are interchangeable to the model."""
+    from mogformer.graph import nearest_encoding_distance
+
+    encodings = np.array([[0.0, 0.0], [0.0, 0.0], [1.0, 0.0], [0.0, 1.0]])
+    distance = nearest_encoding_distance(encodings)
+
+    assert distance.shape == (4,)
+    assert distance[0] == 0.0 and distance[1] == 0.0
+    assert (distance[2:] > 0).all()
+
+
+def test_nearest_encoding_distance_is_scale_free() -> None:
+    """Scaling every encoding leaves the relative distances unchanged."""
+    from mogformer.graph import nearest_encoding_distance
+
+    encodings = np.random.default_rng(0).normal(size=(12, 4))
+    np.testing.assert_allclose(
+        nearest_encoding_distance(encodings),
+        nearest_encoding_distance(10 * encodings),
+    )
+
+
+def test_nearest_encoding_distance_rejects_degenerate_input() -> None:
+    """One node, or no variation at all, has no meaningful nearest neighbour."""
+    from mogformer.graph import nearest_encoding_distance
+
+    with pytest.raises(ValueError, match="at least two"):
+        nearest_encoding_distance(np.zeros((1, 3)))
+    with pytest.raises(ValueError, match="identical"):
+        nearest_encoding_distance(np.ones((3, 2)))
+
+
+# --------------------------------------------------------------------------
+# STRING evidence channels and weighted encodings
+# --------------------------------------------------------------------------
+def test_channel_scores_combine_like_string() -> None:
+    """One channel passes through; two independent channels reinforce."""
+    from mogformer.graph import combine_channel_scores
+
+    combined = combine_channel_scores(np.array([[900, 0], [500, 500], [0, 0]]))
+
+    assert combined[0] == pytest.approx(900.0)
+    assert 500.0 < combined[1] < 1000.0
+    assert combined[2] == pytest.approx(41.0)  # the prior alone
+
+
+def test_channel_edges_ignore_coexpression(tmp_path, string_files) -> None:
+    """An edge supported only by co-expression is dropped; scores lie in (0, 1]."""
+    from mogformer.graph import parse_string_channel_edges
+
+    _, aliases = string_files
+    detailed = tmp_path / "detailed.txt"
+    detailed.write_text(
+        "protein1 protein2 neighborhood fusion cooccurence coexpression "
+        "experimental database textmining combined_score\n"
+        "9606.P1 9606.P2 0 0 0 0 800 0 0 800\n"
+        "9606.P2 9606.P3 0 0 0 999 0 0 0 999\n"
+        "9606.P1 9606.P3 0 0 0 0 300 300 0 500\n",
+        encoding="utf-8",
+    )
+    weights = parse_string_channel_edges(
+        str(detailed), aliases, ["ESR1", "ERBB2", "MKI67"]
+    )
+
+    assert set(weights) == {("ERBB2", "ESR1"), ("ESR1", "MKI67")}
+    assert weights[("ERBB2", "ESR1")] == pytest.approx(0.8)
+    assert all(0.0 < value <= 1.0 for value in weights.values())
+
+
+def test_weighted_edges_round_trip_and_fill_the_adjacency(tmp_path) -> None:
+    """Saved scores come back, and a weighted adjacency carries them."""
+    from mogformer.graph import load_string_edge_weights, load_string_edges
+    from mogformer.graph.string_graph import save_string_edges
+
+    weights = {("A", "B"): 0.9, ("B", "C"): 0.5}
+    path = save_string_edges(weights, tmp_path / "edges.tsv", weights)
+    restored = load_string_edge_weights(path)
+    cache = StringGraphCache.from_edges(load_string_edges(path), weights=restored)
+
+    assert restored == weights
+    weighted = cache.induced_adjacency(["A", "B", "C"], weighted=True)
+    assert weighted[0, 1] == pytest.approx(0.9)
+    assert cache.induced_adjacency(["A", "B", "C"])[0, 1] == 1.0
+
+
+def test_weighted_random_walk_follows_edge_confidence() -> None:
+    """A strong edge makes an immediate return more likely than a weak one."""
+    adjacency = torch.tensor([[0.0, 0.9, 0.1], [0.9, 0.0, 0.0], [0.1, 0.0, 0.0]])
+    binary = GraphPositionalEncoding(pe_dim=2)(adjacency)
+    weighted = GraphPositionalEncoding(pe_dim=2, weighted=True)(adjacency)
+
+    # Two-step return from the hub: uniform 1.0 either way, but a walker from
+    # node 1 returns through the hub with probability 0.9 when weighted.
+    assert binary[1, 1] == pytest.approx(0.5)
+    assert weighted[1, 1] == pytest.approx(0.9)

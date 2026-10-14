@@ -41,6 +41,18 @@ class DataConfig:
             explicitly is what keeps a four-class run comparable to a five-class
             one rather than a separate experiment.
         curated_genes_file: Genes force-included after variance ranking, or None.
+        cohort_file: A cohort archive written by
+            :func:`~mogformer.data.omics.save_omics_bundle`, read instead of the
+            raw matrices when set.
+        ploidy_file: Per-patient ploidy table (``patient_id``, ``ploidy``),
+            estimated over the full absolute copy-number matrix; required by
+            the ``ploidy_relative`` copy-number scale.
+        cohort_rule: Which patients the cohort contains and why, in words.
+            Recorded in every provenance record, so a cohort is never implied.
+        batch_file: Per-patient table (patients in the first column) holding
+            the processing batch, relative to ``raw_dir``; read when
+            ``preprocess.batch_correction`` is set.
+        batch_column: Column of ``batch_file`` holding the batch.
     """
 
     raw_dir: str = "data/raw"
@@ -51,6 +63,11 @@ class DataConfig:
     label_col: str = "SUBTYPE"
     exclude_classes: tuple[str, ...] = ()
     curated_genes_file: str | None = None
+    cohort_file: str | None = None
+    ploidy_file: str | None = None
+    cohort_rule: str | None = None
+    batch_file: str | None = None
+    batch_column: str | None = None
 
 
 @dataclass
@@ -86,12 +103,29 @@ class PreprocessConfig:
         active_modalities: Modalities used, driving both selection and output.
         mad_on_log_rna: Rank expression by the deviation of its log.
         impute: Replace missing values with training-fold medians.
+        rna_scale: ``"counts"`` when expression arrives as non-negative
+            counts, which are log-transformed; ``"log"`` when it is already on
+            a log or standardised scale, which is only standardised.
+        cnv_representation: Scale copy number is presented on, one of
+            :data:`~mogformer.data.omics.CNV_REPRESENTATIONS`.
+        clip_z: Clip every standardised value to ``[-clip_z, clip_z]``, or
+            None to leave the tails unbounded.
+        batch_correction: Remove processing-batch effects before anything
+            else, one of
+            :data:`~mogformer.data.batch_correction.BATCH_CORRECTIONS`, or
+            None. Fitted on the fitting patients only.
+        batch_modalities: Omics the batch correction is applied to.
     """
 
     top_k: int = 250
     active_modalities: tuple[str, ...] = MODALITY_ORDER
     mad_on_log_rna: bool = False
     impute: bool = True
+    rna_scale: str = "counts"
+    cnv_representation: str = "absolute"
+    clip_z: float | None = None
+    batch_correction: str | None = None
+    batch_modalities: tuple[str, ...] = ("rna", "methy")
 
 
 @dataclass
@@ -102,22 +136,29 @@ class GraphConfig:
         ppi_file: STRING protein links file.
         alias_file: STRING protein aliases file.
         grn_file: CollecTRI signed edges file, or None to disable.
+        edges_file: A gene-symbol edge list already reduced to this cohort's
+            universe. When set, ``ppi_file`` and ``alias_file`` are not read —
+            the 800 MB STRING pair is only needed to produce this file once.
         string_threshold: Minimum STRING combined score.
         max_distance: Largest hop count represented exactly by the bias.
         pe_dim: Width of the positional encoding.
         pe_method: One of
             :data:`~mogformer.graph.positional_encoding.PE_METHODS`.
         use_grn: Enable the signed regulatory attention bias.
+        weighted_pe: Weight random-walk positional encodings by edge
+            confidence, when the edge list carries a score.
     """
 
     ppi_file: str = "data/clean/9606.protein.links.v12.0.txt"
     alias_file: str = "data/clean/9606.protein.aliases.v12.0.txt"
     grn_file: str | None = None
+    edges_file: str | None = None
     string_threshold: int = 400
     max_distance: int = 10
     pe_dim: int = 32
     pe_method: str = "rwpe"
     use_grn: bool = False
+    weighted_pe: bool = False
 
 
 @dataclass
@@ -142,11 +183,47 @@ class ModelConfig:
         unimodal_dropout_fill: One of
             :data:`~mogformer.models.layers.modality_dropout.DROPOUT_FILLS`.
         gene_id_embedding: Add per-gene identity embeddings.
-        pretrained_emb_file: Pretrained gene embeddings, or None.
+        pretrained_emb_file: Pretrained gene embeddings, as either a
+            headerless matrix or an ``.npz`` bundle, or None.
+        pretrained_emb_symbol_file: Row-aligned gene symbols, required only
+            when ``pretrained_emb_file`` is a headerless matrix.
         pretrained_emb_adapter_rank: Adapter rank for the pretrained path.
         lambda_gate: Per-head learnable scaling of the distance bias.
         fusion_type: Intra-gene fusion layer, one of
             :data:`~mogformer.models.ssl.FUSION_TYPES`.
+        mask_gene_frac: Self-supervision: fraction of genes hidden entirely.
+        mask_modality_frac: Self-supervision: probability of hiding one
+            modality of a gene.
+        mask_modality_weights: Self-supervision: relative weights over
+            ``(rna, cnv, methy)`` when choosing the modality to hide.
+        global_offset: Self-supervision: let the decoder's global head add a
+            patient-level offset shared by every gene and modality.
+        isolated_token: Give genes without an edge in the interaction graph a
+            learned positional code of their own.
+        omics_mask_prob: Self-supervision: probability, per patient, of
+            hiding one whole omics.
+        neighbourhood_mask_share: Self-supervision: share of whole-gene masks
+            drawn as a gene plus its one-hop interaction neighbours.
+        identity_modulation: Self-supervision: gene identity scales and
+            shifts each value token (FiLM), not only sits beside it.
+        n_summary_tokens: Self-supervision: summary tokens ahead of the
+            genes; the embedding is their concatenation.
+        global_head: Self-supervision: decoder global head, one of
+            :data:`~mogformer.models.layers.decoder.GLOBAL_HEADS`.
+        fusion_residual: Self-supervision: carry the unfused omics tokens
+            past the gated fusion.
+        program_source: Self-supervision: where gene programs come from, one
+            of :data:`~mogformer.data.gene_programs.PROGRAM_SOURCES`, or None
+            for the summary-token embedding.
+        n_programs: Self-supervision: number of gene programs; each gets a
+            scoped read-out and scopes the decoder's global head.
+        program_width: Self-supervision: width of each program embedding; the
+            patient embedding is ``n_programs * program_width`` wide.
+        program_layers: Self-supervision: read-out layers of the program
+            queries.
+        program_input: Self-supervision: gene states the program queries
+            read, ``"final"`` (after the inter-gene transformer) or
+            ``"fused"`` (each gene's own token, before any mixing).
     """
 
     d: int = 128
@@ -164,9 +241,26 @@ class ModelConfig:
     unimodal_dropout_fill: str = "zero"
     gene_id_embedding: bool = False
     pretrained_emb_file: str | None = None
+    pretrained_emb_symbol_file: str | None = None
     pretrained_emb_adapter_rank: int = 0
     lambda_gate: bool = False
     fusion_type: str = "attention"
+    mask_gene_frac: float = 0.15
+    mask_modality_frac: float = 0.15
+    mask_modality_weights: tuple[float, ...] = (2.0, 1.0, 1.0)
+    global_offset: bool = True
+    isolated_token: bool = False
+    omics_mask_prob: float = 0.0
+    program_source: str | None = None
+    n_programs: int = 0
+    program_width: int = 32
+    program_layers: int = 2
+    program_input: str = "final"
+    neighbourhood_mask_share: float = 0.0
+    identity_modulation: bool = False
+    n_summary_tokens: int = 1
+    global_head: str = "film"
+    fusion_residual: bool = False
 
 
 @dataclass
@@ -179,12 +273,67 @@ class TrainConfig:
         weight_decay: AdamW weight decay.
         max_epochs: Upper bound on training epochs.
         patience: Epochs without inner-validation improvement before stopping.
+        min_epochs: Epochs trained before early stopping may trigger. Training
+            can sit on a plateau for tens of epochs before it improves; stopping
+            during it keeps a model that never learned.
+        selection_window: Epochs over which inner-validation macro-F1 is
+            averaged before comparing epochs. A small inner split makes the
+            per-epoch score noisy, and selecting on single-epoch spikes keeps a
+            lucky epoch rather than a good one. One means no averaging.
         batch_size: Patients per step.
         inner_val_frac: Fraction of the training fold held out for early
             stopping. The outer fold is never seen during model selection.
         focal_gamma: Focusing exponent of the classification loss.
+        class_weight_power: Exponent on inverse class frequency for the loss's
+            class weights: 0.5 (square root) by default, 1 for full inverse
+            frequency, 0 for equal weights.
         log_every: Epoch interval for progress logging.
         seed: Seed applied before training.
+        gate_lr_multiplier: Learning-rate multiplier of the attention-bias
+            gates relative to every other weight.
+        warmup_epochs: Epochs of linear learning-rate warm-up.
+        lr_schedule: ``"constant"``, or ``"cosine"`` decay from ``lr`` to
+            ``min_lr`` over the epochs after warm-up.
+        per_modality_loss: Self-supervision: average the reconstruction loss
+            within each modality, then sum, so each modality's share of the
+            gradient does not depend on how often it is masked.
+        monitor_frac: Self-supervision: share of patients used only to decide
+            when to stop.
+        heldout_frac: Self-supervision: share of patients never trained on and
+            never used for stopping, kept to measure reconstruction.
+        split_seed: Self-supervision: seed of the held-out and monitoring
+            splits and of the fixed monitoring masks, kept apart from ``seed``
+            so that encoders trained with different seeds share their splits.
+        n_readout_masks: Self-supervision: random masks averaged over for the
+            masked summary read-out.
+        lambda_global: Self-supervision: weight of the decoder's global-head
+            loss (the local head's is 1).
+        decorrelation_penalty: Self-supervision: weight of the embedding
+            decorrelation penalty (0 disables it).
+        uniformity_weight: Self-supervision: weight of the uniformity term on
+            the normalised summary (0 disables it).
+        vicreg_weight: Self-supervision: weight of VICReg's variance and
+            covariance terms on the expanded summary (0 disables them).
+        memory_bank_size: Self-supervision: recent summaries the two
+            regularisers read beside the batch.
+        expander_width: Self-supervision: width of the VICReg expander.
+        selection: Self-supervision: ``"loss"`` keeps the epoch with the best
+            monitoring loss; ``"loss_then_rank"`` keeps, among the epochs
+            within ``selection_tolerance`` of it, the one with the highest
+            RankMe.
+        selection_tolerance: Self-supervision: relative loss tolerance of
+            ``"loss_then_rank"``.
+        contrastive_weight: Self-supervision: weight of the cross-omics
+            InfoNCE loss between two views of each patient that each lack a
+            different omics (0 disables the two-view step).
+        contrastive_temperature: Self-supervision: InfoNCE temperature.
+        projection_width: Self-supervision: output width of the contrastive
+            projection head.
+        two_views: Self-supervision: train on the two cross-omics views even
+            without the contrastive loss (the control for it).
+        view_omics_prob: Self-supervision: probability, per patient and view,
+            that a view hides a whole omics (the two views then hide
+            different ones); 1.0 hides one in every view.
     """
 
     lr: float = 1e-4
@@ -192,11 +341,35 @@ class TrainConfig:
     weight_decay: float = 1e-4
     max_epochs: int = 300
     patience: int = 40
+    min_epochs: int = 0
+    selection_window: int = 1
     batch_size: int = 32
     inner_val_frac: float = 0.2
     focal_gamma: float = 2.0
+    class_weight_power: float = 0.5
     log_every: int = 1
     seed: int = 42
+    gate_lr_multiplier: float = 10.0
+    warmup_epochs: int = 0
+    lr_schedule: str = "constant"
+    per_modality_loss: bool = False
+    monitor_frac: float = 0.12
+    heldout_frac: float = 0.0
+    split_seed: int = 42
+    n_readout_masks: int = 10
+    lambda_global: float = 1.0
+    decorrelation_penalty: float = 0.0
+    uniformity_weight: float = 0.0
+    vicreg_weight: float = 0.0
+    memory_bank_size: int = 512
+    expander_width: int = 512
+    selection: str = "loss"
+    selection_tolerance: float = 0.01
+    contrastive_weight: float = 0.0
+    contrastive_temperature: float = 0.3
+    projection_width: int = 128
+    two_views: bool = False
+    view_omics_prob: float = 1.0
 
 
 @dataclass

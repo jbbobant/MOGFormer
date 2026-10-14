@@ -93,6 +93,10 @@ def compute_fold_metrics(
         return scores
 
     binarised = label_binarize(y_true, classes=labels)
+    if binarised.shape[1] == 1:
+        # With two classes label_binarize returns a single column (the second
+        # class); restore one indicator per class to match y_proba's columns.
+        binarised = np.hstack([1 - binarised, binarised])
     present = binarised.sum(axis=0) > 0
 
     try:
